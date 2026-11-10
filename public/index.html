@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcript Viewer</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f0efec;
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --accent: #2a78d6; --error: #d03b3b; --live: #0ca30c;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --user-bg: #eaf2fc; --code-bg: #f3f2ee;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --accent: #6da7ec; --error: #e66767;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --user-bg: #17283d; --code-bg: #141413;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --accent: #6da7ec; --error: #e66767;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --user-bg: #17283d; --code-bg: #141413;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+header { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 20px; padding: 10px 16px;
+  background: var(--surface); border-bottom: 1px solid var(--border); }
+header .brand { font-weight: 600; }
+header nav a { color: var(--ink-2); margin-right: 14px; }
+header nav a.on { color: var(--ink); font-weight: 600; }
+.live { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.live i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.live.on i { background: var(--live); }
+main { max-width: 1100px; margin: 0 auto; padding: 16px; }
+h1 { font-size: 20px; margin: 4px 0 4px; }
+.sub { color: var(--ink-2); font-size: 13px; }
+.muted { color: var(--muted); }
+.num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.tile .k { font-size: 12px; color: var(--ink-2); }
+.tile .v { font-size: 20px; font-weight: 600; }
+.tile .d { font-size: 12px; color: var(--muted); }
+input[type=search] { width: 100%; max-width: 360px; padding: 7px 10px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--ink); font: inherit; }
+.tablewrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; }
+th, td { padding: 8px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+th { font-size: 12px; font-weight: 600; color: var(--ink-2); text-align: left; white-space: nowrap; }
+th.num { text-align: right; }
+tr:last-child td { border-bottom: 0; }
+tbody tr.row { cursor: pointer; }
+tbody tr.row:hover { background: var(--surface-2); }
+.title-cell { min-width: 260px; }
+.title-cell .t { font-weight: 500; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.title-cell .p { font-size: 12px; color: var(--muted); }
+@keyframes flash { from { background: color-mix(in srgb, var(--live) 22%, transparent); } to { background: transparent; } }
+.flash { animation: flash 2s ease-out; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-right: 10px; }
+.seg button { border: 0; background: var(--surface); color: var(--ink-2); padding: 5px 10px; font: inherit; font-size: 13px; cursor: pointer; }
+.seg button.on { background: var(--surface-2); color: var(--ink); font-weight: 600; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+
+/* conversation */
+.turn { margin: 18px 0; }
+.turn-head { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px;
+  font-variant-numeric: tabular-nums; white-space: normal; }
+.turn-head .cost { font-weight: 600; color: var(--ink); }
+.reply { margin-left: 28px; }
+@media (max-width: 640px) { .reply { margin-left: 12px; } }
+details.step { margin: 4px 0; }
+details.step > summary { color: var(--muted); }
+details.step > summary .foot { display: inline; }
+details.step[open] > summary { margin-bottom: 2px; }
+.toolbar { position: sticky; top: 45px; z-index: 4; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; background: var(--page); }
+.toolbar button { border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); padding: 4px 10px; border-radius: 6px;
+  font: inherit; font-size: 13px; cursor: pointer; }
+.toolbar button.on { color: var(--ink); background: var(--surface-2); font-weight: 600; }
+.msg { border-radius: 8px; padding: 10px 12px; margin: 6px 0; overflow-wrap: anywhere; }
+.msg.user { background: var(--user-bg); white-space: pre-wrap; }
+.msg.assistant { background: var(--surface); border: 1px solid var(--border); }
+.foot { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.msg > .foot { margin-bottom: 6px; }
+.md p { margin: 0 0 8px; } .md p:last-child { margin-bottom: 0; }
+.md h1, .md h2, .md h3, .md h4 { font-size: 15px; margin: 10px 0 6px; }
+.md ul, .md ol { margin: 4px 0 8px; padding-left: 22px; }
+.md table { width: auto; margin: 6px 0; } .md td, .md th { border: 1px solid var(--grid); padding: 4px 8px; }
+code { font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+pre { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 8px 10px; border-radius: 6px;
+  overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; max-height: 480px; overflow-y: auto; }
+pre code { background: none; padding: 0; }
+details { margin: 6px 0; }
+details > summary { cursor: pointer; color: var(--ink-2); font-size: 13px; list-style-position: outside; }
+details.tool, details.think, details.meta, details.subagent { border-left: 2px solid var(--grid); padding-left: 10px; }
+details.subagent { border-left-color: var(--s1); }
+details.tool > summary b { color: var(--ink); font-weight: 600; }
+.err { color: var(--error); }
+.marker { text-align: center; font-size: 12px; color: var(--muted); margin: 16px 0; }
+.lbl { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin-top: 8px; }
+
+/* chart */
+.chart { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 12px; position: relative; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; background: var(--c); vertical-align: -1px; }
+.chart svg { display: block; width: 100%; height: 280px; }
+.chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.12); padding: 8px 10px; font-size: 12px; display: none; min-width: 170px; z-index: 3; }
+.tip .r { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+.tip .r i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 6px; }
+.hit { fill: transparent; }
+.hit:hover { fill: var(--ink); fill-opacity: .04; }
+@media (max-width: 640px) { header { gap: 10px; } .hide-sm { display: none; } }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">Transcripts</span>
+  <nav><a href="#/" data-nav="list">Sessions</a><a href="#/usage" data-nav="usage">Usage</a></nav>
+  <span class="live" id="live"><i></i><span>connecting</span></span>
+</header>
+<main id="view"></main>
+<script>
+'use strict';
+const $view = document.getElementById('view');
+const S = { sessions: [], filter: '', detail: null, detailKey: null, usage: null, expandMode: 'replies', range: 30, metric: 'cost', flash: new Set() };
+
+// ---------- formatting ----------
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function fmtTok(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + 'k';
+  return String(n);
+}
+function fmtUsd(n, assumed) {
+  if (n == null) return '—';
+  const s = n >= 100 ? '$' + Math.round(n).toLocaleString() : n >= 1 ? '$' + n.toFixed(2) : n >= 0.01 ? '$' + n.toFixed(2) : n > 0 ? '<$0.01' : '$0';
+  return (assumed ? '~' : '') + s;
+}
+function rel(ts) {
+  if (!ts) return '';
+  const s = (Date.now() - Date.parse(ts)) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
+  if (s < 7 * 86400) return Math.floor(s / 86400) + ' d ago';
+  return new Date(ts).toLocaleDateString();
+}
+const when = ts => ts ? new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+const totTok = t => t.in + t.out + t.cr + t.cw5 + t.cw1h;
+function sumTotals(a, b) {
+  return { in: a.in + b.in, out: a.out + b.out, cr: a.cr + b.cr, cw5: a.cw5 + b.cw5, cw1h: a.cw1h + b.cw1h, think: a.think + b.think,
+    calls: a.calls + b.calls, cost: a.cost + b.cost, assumed: a.assumed || b.assumed, unpriced: a.unpriced + b.unpriced };
+}
+function shortPath(p) { return p ? p.replace(/^\/Users\/[^/]+/, '~') : ''; }
+
+// Minimal markdown: fenced code, inline code, headings, lists, bold/italics, links, tables.
+function md(src) {
+  const out = [];
+  const lines = String(src).split('\n');
+  let i = 0;
+  const inline = t => esc(t)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<code title="$2">$1</code>');
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push('<pre><code>' + esc(buf.join('\n')) + '</code></pre>'); continue;
+    }
+    const h = l.match(/^(#{1,4})\s+(.*)/);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (/^\s*\|.*\|\s*$/.test(l) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+      const cells = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      let html = '<table><tr>' + cells(l).map(c => `<th>${inline(c)}</th>`).join('') + '</tr>';
+      i += 2;
+      while (i < lines.length && /^\s*\|/.test(lines[i])) html += '<tr>' + cells(lines[i++]).map(c => `<td>${inline(c)}</td>`).join('') + '</tr>';
+      out.push(html + '</table>'); continue;
+    }
+    if (/^\s*([-*]|\d+\.)\s+/.test(l)) {
+      const ordered = /^\s*\d+\./.test(l);
+      const items = [];
+      while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*([-*]|\d+\.)\s+/, ''));
+      out.push(`<${ordered ? 'ol' : 'ul'}>` + items.map(x => `<li>${inline(x)}</li>`).join('') + `</${ordered ? 'ol' : 'ul'}>`); continue;
+    }
+    if (!l.trim()) { i++; continue; }
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^\s*(```|#{1,4}\s|[-*]\s|\d+\.\s|\|)/.test(lines[i])) para.push(lines[i++]);
+    if (!para.length) para.push(lines[i++]);
+    out.push('<p>' + para.map(inline).join('<br>') + '</p>');
+  }
+  return out.join('');
+}
+
+// ---------- data ----------
+const getJson = u => fetch(u, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+function route() {
+  const h = location.hash || '#/';
+  let m;
+  if ((m = h.match(/^#\/s\/([^/]+)\/([^/]+)$/))) return { name: 'session', p: decodeURIComponent(m[1]), s: decodeURIComponent(m[2]) };
+  if (h.startsWith('#/usage')) return { name: 'usage' };
+  return { name: 'list' };
+}
+async function load(changed) {
+  const r = route();
+  document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === (r.name === 'usage' ? 'usage' : 'list')));
+  if (r.name === 'list') {
+    const d = await getJson('/api/sessions');
+    S.sessions = d.sessions; S.root = d.root;
+    if (changed) changed.forEach(k => S.flash.add(k));
+    renderList();
+  } else if (r.name === 'session') {
+    const key = r.p + '/' + r.s;
+    if (changed && !changed.includes(key)) return;
+    try { S.detail = await getJson(`/api/session?p=${encodeURIComponent(r.p)}&s=${encodeURIComponent(r.s)}`); }
+    catch { $view.innerHTML = '<p class="muted">Session not found.</p>'; return; }
+    renderSession(key, S.detailKey === key);
+    S.detailKey = key;
+  } else {
+    S.usage = await getJson('/api/usage');
+    renderUsage();
+  }
+}
+
+// ---------- sessions list ----------
+function renderList() {
+  if (!document.getElementById('list-body')) {
+    $view.innerHTML = `
+      <h1>Sessions</h1><div class="sub" id="list-sub"></div>
+      <div class="tiles" id="list-tiles"></div>
+      <input type="search" id="q" placeholder="Filter by title, prompt, or folder" value="${esc(S.filter)}">
+      <div class="tablewrap"><table>
+        <thead><tr><th>Session</th><th>Last active</th><th class="num hide-sm">Prompts</th><th class="num hide-sm">API calls</th><th class="num">Tokens</th><th class="num">Est. cost</th></tr></thead>
+        <tbody id="list-body"></tbody></table></div>`;
+    document.getElementById('q').addEventListener('input', e => { S.filter = e.target.value; renderList(); });
+    document.getElementById('list-body').addEventListener('click', e => {
+      const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a')) location.hash = tr.dataset.href;
+    });
+  }
+  const q = S.filter.toLowerCase();
+  const rows = S.sessions.filter(s => !q || [s.title, s.firstPrompt, s.lastPrompt, s.cwd, s.project].some(x => x && x.toLowerCase().includes(q)));
+  const today = new Date().toDateString();
+  let all = 0, todayCost = 0, assumed = false;
+  for (const s of S.sessions) { const t = sumTotals(s.main, s.sub); all += t.cost; assumed ||= t.assumed; }
+  document.getElementById('list-sub').textContent = `${S.sessions.length} sessions in ${shortPath(S.root)} · updates live`;
+  const active = S.sessions.filter(s => new Date(s.lastTs).toDateString() === today).length;
+  document.getElementById('list-tiles').innerHTML =
+    tile('Sessions', S.sessions.length, `${active} active today`) +
+    tile('Est. cost, all logged sessions', fmtUsd(all, assumed), 'list prices, incl. subagents');
+  document.getElementById('list-body').innerHTML = rows.map(s => {
+    const t = sumTotals(s.main, s.sub);
+    const href = `#/s/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session)}`;
+    const title = s.title || s.firstPrompt || s.session;
+    const flash = S.flash.has(s.key) ? ' flash' : '';
+    return `<tr class="row${flash}" data-href="${href}">
+      <td class="title-cell"><div class="t"><a href="${href}">${esc(title)}</a></div>
+        <div class="p">${esc(shortPath(s.cwd) || s.project)}${s.gitBranch && s.gitBranch !== 'HEAD' ? ' · ' + esc(s.gitBranch) : ''}${s.subagents ? ` · ${s.subagents} subagent${s.subagents > 1 ? 's' : ''}` : ''}</div></td>
+      <td title="${esc(when(s.lastTs))}">${esc(rel(s.lastTs))}</td>
+      <td class="num hide-sm">${s.prompts}</td>
+      <td class="num hide-sm">${t.calls}</td>
+      <td class="num">${fmtTok(totTok(t))}</td>
+      <td class="num">${fmtUsd(t.cost, t.assumed)}</td></tr>`;
+  }).join('') || `<tr><td colspan="6" class="muted">No sessions match.</td></tr>`;
+  S.flash.clear();
+}
+const tile = (k, v, d) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>${d ? `<div class="d">${esc(d)}</div>` : ''}</div>`;
+
+// ---------- session reader ----------
+function toolSummary(b) {
+  const i = b.input || {};
+  const s = i.description || i.command || i.file_path || i.pattern || i.url || i.query || i.prompt || i.skill || '';
+  return typeof s === 'string' ? s.split('\n')[0].slice(0, 140) : '';
+}
+function renderInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return `<div class="lbl">Input</div><pre>${esc(JSON.stringify(input, null, 2))}</pre>`;
+  const short = {}, long = [];
+  for (const [k, v] of Object.entries(input)) {
+    if (typeof v === 'string' && (v.includes('\n') || v.length > 160)) long.push([k, v]); else short[k] = v;
+  }
+  let html = Object.keys(short).length ? `<div class="lbl">Input</div><pre>${esc(JSON.stringify(short, null, 2))}</pre>` : '';
+  for (const [k, v] of long) html += `<div class="lbl">${esc(k)}</div><pre>${esc(v)}</pre>`;
+  return html;
+}
+function usageLine(it, tag = 'div') {
+  if (!it.usage) return '';
+  const u = it.usage;
+  const parts = [fmtUsd(it.cost, it.assumed), it.model + (it.speed === 'fast' ? ' (fast)' : ''),
+    `input ${fmtTok(u.in)}`, `cache write ${fmtTok(u.cw5 + u.cw1h)}`, `cache read ${fmtTok(u.cr)}`,
+    `output ${fmtTok(u.out)}${u.think ? ` (thinking ${fmtTok(u.think)})` : ''}`];
+  return `<${tag} class="foot">${parts.map(esc).join(' · ')}</${tag}>`;
+}
+function convTotals(items) {
+  const t = { in: 0, out: 0, cr: 0, cw5: 0, cw1h: 0, think: 0, calls: 0, cost: 0, assumed: false, unpriced: 0 };
+  for (const it of items) if (it.kind === 'assistant' && it.usage) {
+    const u = it.usage; t.in += u.in; t.out += u.out; t.cr += u.cr; t.cw5 += u.cw5; t.cw1h += u.cw1h; t.think += u.think; t.calls++;
+    if (it.cost != null) t.cost += it.cost; else t.unpriced++;
+    t.assumed ||= !!it.assumed;
+  }
+  return t;
+}
+function renderBlocks(it, results, subByTool, prefix) {
+  return it.blocks.map((b, i) => {
+    if (b.type === 'text') return `<div class="md">${md(b.text)}</div>`;
+    if (b.type === 'thinking') {
+      const k = `${prefix}think:${it.id}:${i}`;
+      return `<details class="think" data-k="${esc(k)}"><summary>Thinking</summary>${b.text ? `<div class="md">${md(b.text)}</div>`
+        : '<div class="muted">The log has no thinking text. The API leaves it empty unless summaries are turned on. Its token count is in the line below this message.</div>'}</details>`;
+    }
+    if (b.type === 'tool_use') {
+      const r = results[b.id];
+      const sub = subByTool[b.id];
+      const k = `${prefix}tool:${b.id}`;
+      let body = renderInput(b.input);
+      if (sub) {
+        const st = convTotals(sub.items);
+        body += `<details class="subagent" data-k="${esc(prefix)}sub:${esc(sub.agentId)}"><summary>Subagent conversation · ${st.calls} API calls · ${fmtTok(totTok(st))} tokens · ${fmtUsd(st.cost, st.assumed)}</summary>
+          ${renderItems(sub.items, sub.results, {}, `${prefix}${sub.agentId}/`)}</details>`;
+      }
+      body += r ? `<div class="lbl">Result</div><pre class="${r.isError ? 'err' : ''}">${esc(r.text)}</pre>` : `<div class="lbl">Result</div><div class="muted">No result yet.</div>`;
+      return `<details class="tool" data-k="${esc(k)}"><summary><b>${esc(b.name)}</b> ${esc(toolSummary(b))}${r && r.isError ? ' <span class="err">· error</span>' : ''}${sub ? ' <span class="muted">· subagent</span>' : ''}</summary>${body}</details>`;
+    }
+    return '';
+  }).join('');
+}
+function renderItems(items, results, subByTool, prefix = '') {
+  // Group into turns: each real (non-meta) user prompt starts one.
+  const turns = [];
+  let cur = null;
+  for (const it of items) {
+    if (it.kind === 'user' && !it.meta) { cur = { prompt: it, rest: [] }; turns.push(cur); }
+    else { if (!cur) { cur = { prompt: null, rest: [] }; turns.push(cur); } cur.rest.push(it); }
+  }
+  return turns.map((t, ti) => {
+    const tot = convTotals(t.rest);
+    let subCost = 0, subAssumed = false;
+    for (const it of t.rest) if (it.kind === 'assistant') for (const b of it.blocks) if (b.type === 'tool_use' && subByTool[b.id]) {
+      const st = convTotals(subByTool[b.id].items); subCost += st.cost; subAssumed ||= st.assumed;
+    }
+    const head = `<div class="turn-head"><span>${esc(when(t.prompt ? t.prompt.ts : (t.rest[0] || {}).ts))}</span>
+      <span>${tot.calls} API call${tot.calls === 1 ? '' : 's'}</span><span>${fmtTok(totTok(tot))} tokens</span>
+      <span class="cost">${fmtUsd(tot.cost + subCost, tot.assumed || subAssumed)}</span>${subCost ? `<span>subagents ${fmtUsd(subCost, subAssumed)}</span>` : ''}</div>`;
+    const prompt = t.prompt ? `<div class="msg user">${head}${esc(t.prompt.text)}${t.prompt.images ? `<div class="muted">[${t.prompt.images} image${t.prompt.images > 1 ? 's' : ''}]</div>` : ''}</div>` : '';
+    const rest = t.rest.map((it, ii) => {
+      if (it.kind === 'marker') return `<div class="marker">— ${esc(it.text)} —</div>`;
+      if (it.kind === 'user') {
+        const first = it.text.split('\n')[0].slice(0, 100);
+        return `<details class="meta" data-k="${esc(prefix)}meta:${esc(it.uuid || ti + '.' + ii)}"><summary>Context added by Claude Code: ${esc(first)}</summary><pre>${esc(it.text)}</pre></details>`;
+      }
+      const blocks = renderBlocks(it, results, subByTool, prefix);
+      // Every reply collapses to its usage line. Replies with visible text are marked so the
+      // default view ("Expand items with replies") opens them and leaves silent steps closed.
+      const hasText = it.blocks.some(b => b.type === 'text' && b.text.trim());
+      const line = usageLine(it, 'span') || '<span class="foot">Step</span>';
+      return `<details class="step" data-k="${esc(prefix)}step:${esc(it.id || ti + '.' + ii)}"><summary>${line}</summary><div class="msg assistant${hasText ? ' has-text' : ''}">${blocks}</div></details>`;
+    }).join('');
+    return `<section class="turn">${prompt}<div class="reply">${rest}</div></section>`;
+  }).join('');
+}
+function expandPolicy(el) {
+  if (S.expandMode === 'all') return true;
+  // Open only what's needed to show replies with visible text (e.g. a subagent's answers).
+  if (S.expandMode === 'replies') return !!el.querySelector('.has-text');
+  return false;
+}
+function renderSession(key, isUpdate) {
+  const d = S.detail;
+  const s = d.summary || { main: convTotals(d.items), sub: { in: 0, out: 0, cr: 0, cw5: 0, cw1h: 0, think: 0, calls: 0, cost: 0, assumed: false, unpriced: 0 } };
+  const t = sumTotals(s.main, s.sub);
+  const subByTool = {};
+  for (const sa of d.subagents) if (sa.meta && sa.meta.toolUseId) subByTool[sa.meta.toolUseId] = sa;
+  // Keep open/closed state and scroll position across live refreshes.
+  const known = new Set([...document.querySelectorAll('details[data-k]')].map(x => x.dataset.k));
+  const open = new Set([...document.querySelectorAll('details[data-k][open]')].map(x => x.dataset.k));
+  const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
+  const y = window.scrollY;
+  const models = Object.keys(s.models || {}).join(', ');
+  const orphans = d.subagents.filter(sa => !(sa.meta && sa.meta.toolUseId && d.items.some(it => it.blocks && it.blocks.some(b => b.id === sa.meta.toolUseId))));
+  $view.innerHTML = `
+    <div class="sub"><a href="#/">← Sessions</a></div>
+    <h1>${esc(s.title || s.firstPrompt || key)}</h1>
+    <div class="sub">${esc(shortPath(s.cwd))}${s.gitBranch && s.gitBranch !== 'HEAD' ? ' · ' + esc(s.gitBranch) : ''} · started ${esc(when(s.firstTs))} · last activity ${esc(rel(s.lastTs))}${models ? ' · ' + esc(models) : ''}</div>
+    <div class="tiles">
+      ${tile('Est. cost', fmtUsd(t.cost, t.assumed), s.sub.calls ? `subagents ${fmtUsd(s.sub.cost, s.sub.assumed)}` : 'no subagents')}
+      ${tile('API calls', t.calls, `${s.main.calls} main · ${s.sub.calls} subagent`)}
+      ${tile('Input (uncached)', fmtTok(t.in), '')}
+      ${tile('Cache writes', fmtTok(t.cw5 + t.cw1h), `${fmtTok(t.cw1h)} 1-hour · ${fmtTok(t.cw5)} 5-min`)}
+      ${tile('Cache reads', fmtTok(t.cr), '')}
+      ${tile('Output', fmtTok(t.out), `incl. ${fmtTok(t.think)} thinking`)}
+    </div>
+    ${t.unpriced ? `<div class="sub">${t.unpriced} API calls used models with no price in pricing.json; they aren't in the cost.</div>` : ''}
+    ${t.assumed ? `<div class="sub">~ means some prices are guesses (marked assumed in pricing.json).</div>` : ''}
+    <div class="toolbar">
+      <button data-x="all" class="${S.expandMode === 'all' ? 'on' : ''}">Expand all</button>
+      <button data-x="none" class="${S.expandMode === 'none' ? 'on' : ''}">Collapse all</button>
+      <button data-x="replies" class="${S.expandMode === 'replies' ? 'on' : ''}">Expand items with replies</button>
+    </div>
+    ${renderItems(d.items, d.results, subByTool)}
+    ${orphans.map(sa => `<details class="subagent" data-k="orphan:${esc(sa.agentId)}"><summary>Subagent: ${esc(sa.meta.description || sa.agentId)}</summary>${renderItems(sa.items, sa.results, {}, sa.agentId + '/')}</details>`).join('')}`;
+  // Items already on screen keep their state; new ones follow the last expand/collapse button pressed.
+  document.querySelectorAll('details[data-k]').forEach(x => {
+    x.open = known.has(x.dataset.k) ? open.has(x.dataset.k) : expandPolicy(x);
+  });
+  $view.querySelectorAll('.toolbar [data-x]').forEach(b => b.onclick = () => {
+    S.expandMode = b.dataset.x;
+    $view.querySelectorAll('.toolbar [data-x]').forEach(o => o.classList.toggle('on', o === b));
+    $view.querySelectorAll('details[data-k]').forEach(x => { x.open = expandPolicy(x); });
+  });
+  if (!isUpdate) window.scrollTo(0, 0);
+  else if (atBottom) window.scrollTo(0, document.body.scrollHeight);
+  else window.scrollTo(0, y);
+}
+
+// ---------- usage ----------
+const CATS = [
+  { key: 'in', label: 'Input (uncached)', color: 'var(--s1)', tok: d => d.in, usd: d => d.costParts.in },
+  { key: 'cw', label: 'Cache writes', color: 'var(--s2)', tok: d => d.cw5 + d.cw1h, usd: d => d.costParts.cw },
+  { key: 'cr', label: 'Cache reads', color: 'var(--s3)', tok: d => d.cr, usd: d => d.costParts.cr },
+  { key: 'out', label: 'Output', color: 'var(--s4)', tok: d => d.out, usd: d => d.costParts.out },
+];
+function dayList(days, range) {
+  const map = new Map(days.map(d => [d.day, d]));
+  const end = new Date(); end.setHours(0, 0, 0, 0);
+  let start;
+  if (range === 'all') { start = days.length ? new Date(days[0].day + 'T00:00') : new Date(end); }
+  else { start = new Date(end); start.setDate(start.getDate() - (range - 1)); }
+  const out = [];
+  for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const k = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    out.push(map.get(k) || { day: k, in: 0, out: 0, cr: 0, cw5: 0, cw1h: 0, think: 0, calls: 0, cost: 0, costParts: { in: 0, cw: 0, cr: 0, out: 0 }, assumed: false, byModel: {} });
+  }
+  return out;
+}
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+function renderUsage() {
+  const u = S.usage;
+  const days = dayList(u.days, S.range);
+  const val = S.metric === 'cost' ? (c, d) => c.usd(d) : (c, d) => c.tok(d);
+  const fmt = S.metric === 'cost' ? v => fmtUsd(v) : fmtTok;
+  let tc = 0, tt = 0, calls = 0, assumed = false;
+  for (const d of days) { tc += d.cost; tt += totTok(d); calls += d.calls; assumed ||= d.assumed; }
+  const w = u.window;
+  const rangeBtn = r => `<button data-range="${r}" class="${S.range === r ? 'on' : ''}">${r === 'all' ? 'All' : r + 'd'}</button>`;
+  const metricBtn = (m, l) => `<button data-metric="${m}" class="${S.metric === m ? 'on' : ''}">${l}</button>`;
+
+  // chart geometry (viewBox units)
+  const W = Math.max(320, Math.round(($view.clientWidth || 1000) - 26)), H = 280, L = 56, R = 8, T = 10, B = 26;
+  const totals = days.map(d => CATS.reduce((a, c) => a + val(c, d), 0));
+  const max = niceMax(Math.max(...totals, 0));
+  const pw = W - L - R, ph = H - T - B;
+  const slot = pw / days.length;
+  const bw = Math.max(2, Math.min(28, slot * 0.7));
+  const yv = v => T + ph - (v / max) * ph;
+  let g = '';
+  for (let i = 0; i <= 4; i++) {
+    const v = max * i / 4, y = yv(v);
+    g += `<line x1="${L}" x2="${W - R}" y1="${y}" y2="${y}" stroke="${i === 0 ? 'var(--axis)' : 'var(--grid)'}" stroke-width="1"/>`;
+    g += `<text x="${L - 6}" y="${y + 4}" text-anchor="end">${esc(fmt(v))}</text>`;
+  }
+  const every = Math.ceil(days.length / Math.max(3, Math.floor(pw / 70)));
+  days.forEach((d, i) => {
+    const x = L + slot * i + (slot - bw) / 2;
+    let acc = 0;
+    const segs = CATS.map(c => ({ c, v: val(c, d) })).filter(s => s.v > 0);
+    segs.forEach((s, si) => {
+      const y0 = yv(acc), y1 = yv(acc + s.v);
+      acc += s.v;
+      const h = Math.max(0, y0 - y1 - (si > 0 ? 2 : 0)); // 2px surface gap above the segment below
+      const top = y1;
+      const bottom = top + h;
+      if (h <= 0) return;
+      if (si === segs.length - 1) { // rounded data end on the top segment
+        const r = Math.min(4, bw / 2, h);
+        g += `<path d="M${x},${bottom} V${top + r} Q${x},${top} ${x + r},${top} H${x + bw - r} Q${x + bw},${top} ${x + bw},${top + r} V${bottom} Z" fill="${s.c.color}"/>`;
+      } else g += `<rect x="${x}" y="${top}" width="${bw}" height="${h}" fill="${s.c.color}"/>`;
+    });
+    if (i % every === 0 || i === days.length - 1) {
+      const dt = new Date(d.day + 'T00:00');
+      g += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${dt.toLocaleDateString([], { month: 'short', day: 'numeric' })}</text>`;
+    }
+    g += `<rect class="hit" data-i="${i}" x="${L + slot * i}" y="${T}" width="${slot}" height="${ph}"/>`;
+  });
+
+  const modelRows = Object.entries(u.models).sort((a, b) => b[1].cost - a[1].cost).map(([m, t]) =>
+    `<tr><td>${esc(m)}</td><td class="num">${t.calls}</td><td class="num">${fmtTok(totTok(t))}</td><td class="num">${fmtTok(t.out)}</td><td class="num">${t.unpriced ? '<span class="muted">no price</span>' : fmtUsd(t.cost, t.assumed)}</td></tr>`).join('');
+  const dayRows = days.slice().reverse().filter(d => d.calls).map(d =>
+    `<tr><td>${esc(d.day)}</td><td class="num">${d.calls}</td>${CATS.map(c => `<td class="num">${fmtTok(c.tok(d))}</td>`).join('')}<td class="num">${fmtUsd(d.cost, d.assumed)}</td></tr>`).join('');
+
+  const wasOpen = !!document.querySelector('details[data-k="daytable"][open]');
+  $view.innerHTML = `
+    <h1>Usage</h1>
+    <div class="sub">Exact token counts from the logs, priced at API list rates. Plan limits are set differently, so this is a guide, not your plan's meter.</div>
+    ${w ? `<div class="tiles">${tile('Current weekly window', fmtUsd(w.cost, w.assumed), `${when(w.start)} → ${when(w.end)}`)}${tile('Tokens this window', fmtTok(totTok(w)), `${w.calls} API calls · ${fmtTok(w.out)} output`)}</div>` : ''}
+    <div class="controls">
+      <span class="seg">${[7, 30, 90].map(rangeBtn).join('')}${rangeBtn('all')}</span>
+      <span class="seg">${metricBtn('cost', 'Est. cost')}${metricBtn('tokens', 'Tokens')}</span>
+    </div>
+    <div class="tiles">
+      ${tile('Est. cost in range', fmtUsd(tc, assumed), '')}
+      ${tile('Tokens in range', fmtTok(tt), `${calls} API calls`)}
+      ${tile('Per active day', fmtUsd(tc / Math.max(1, days.filter(d => d.calls).length), assumed), `${days.filter(d => d.calls).length} active days`)}
+    </div>
+    <div class="chart">
+      <div class="legend">${CATS.map(c => `<span style="--c:${c.color}">${esc(c.label)}</span>`).join('')}</div>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${S.metric === 'cost' ? 'Estimated cost' : 'Tokens'} per day, by category">${g}</svg>
+      <div class="tip" id="tip"></div>
+    </div>
+    <details data-k="daytable"${wasOpen ? ' open' : ''}><summary>Table by day</summary><div class="tablewrap"><table>
+      <thead><tr><th>Day</th><th class="num">Calls</th>${CATS.map(c => `<th class="num">${esc(c.label)}</th>`).join('')}<th class="num">Est. cost</th></tr></thead>
+      <tbody>${dayRows || '<tr><td colspan="7" class="muted">No usage in range.</td></tr>'}</tbody></table></div></details>
+    <h1 style="margin-top:22px">By model, all time</h1>
+    <div class="tablewrap"><table><thead><tr><th>Model</th><th class="num">API calls</th><th class="num">Tokens</th><th class="num">Output</th><th class="num">Est. cost</th></tr></thead>
+      <tbody>${modelRows}</tbody></table></div>`;
+
+  $view.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { S.range = b.dataset.range === 'all' ? 'all' : +b.dataset.range; renderUsage(); });
+  $view.querySelectorAll('[data-metric]').forEach(b => b.onclick = () => { S.metric = b.dataset.metric; renderUsage(); });
+  const svg = $view.querySelector('svg'), tip = document.getElementById('tip'), box = $view.querySelector('.chart');
+  svg.addEventListener('mousemove', e => {
+    const i = e.target.dataset && e.target.dataset.i;
+    if (i == null) { tip.style.display = 'none'; return; }
+    const d = days[+i];
+    tip.innerHTML = `<div style="font-weight:600;margin-bottom:4px">${esc(new Date(d.day + 'T00:00').toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }))}</div>` +
+      CATS.slice().reverse().map(c => `<div class="r"><span><i style="background:${c.color}"></i>${esc(c.label)}</span><span>${esc(fmt(val(c, d)))}</span></div>`).join('') +
+      `<div class="r" style="border-top:1px solid var(--grid);margin-top:4px;padding-top:4px"><span>Total</span><span>${esc(fmt(totals[+i]))}</span></div>` +
+      `<div class="r muted"><span>API calls</span><span>${d.calls}</span></div>`;
+    tip.style.display = 'block';
+    const rb = box.getBoundingClientRect();
+    let x = e.clientX - rb.left + 14;
+    if (x + tip.offsetWidth > rb.width) x = e.clientX - rb.left - tip.offsetWidth - 14;
+    tip.style.left = Math.max(0, x) + 'px';
+    tip.style.top = (e.clientY - rb.top + 10) + 'px';
+  });
+  svg.addEventListener('mouseleave', () => { tip.style.display = 'none'; });
+}
+
+// ---------- live updates ----------
+const $live = document.getElementById('live');
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => { $live.classList.add('on'); $live.lastChild.textContent = 'live'; };
+  es.onerror = () => { $live.classList.remove('on'); $live.lastChild.textContent = 'reconnecting'; };
+  es.onmessage = e => {
+    const m = JSON.parse(e.data);
+    if (m.type === 'changed') load(m.sessions).catch(console.error);
+  };
+}
+window.addEventListener('hashchange', () => { load().catch(console.error); });
+let resizeT;
+window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (route().name === 'usage' && S.usage) renderUsage(); }, 150); });
+setInterval(() => { if (route().name === 'list') renderList(); }, 60000); // keep "x min ago" fresh
+load().catch(console.error);
+connect();
+</script>
+</body>
+</html>
