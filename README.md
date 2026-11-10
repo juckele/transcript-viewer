@@ -9,6 +9,27 @@ node server.js            # http://127.0.0.1:4777
 
 No dependencies (Node 18+). It only listens on 127.0.0.1.
 
+## Screenshots
+
+The session that built this tool, as the viewer shows it.
+
+**Reader.** Each prompt box shows that turn's time, API calls, tokens and cost. Steps with no visible
+reply collapse to one line with their cost and tokens; this one is open to show a tool call.
+
+![Reader with one step expanded](docs/screenshots/reader.png)
+
+**Reader, everything collapsed** (dark theme).
+
+![Reader with all steps collapsed, dark theme](docs/screenshots/reader-collapsed-dark.png)
+
+**Usage.** Estimated cost or tokens per day, split by category.
+
+![Usage page with a daily cost tooltip](docs/screenshots/usage.png)
+
+**Sessions.**
+
+![Sessions list](docs/screenshots/sessions.png)
+
 ## Views
 
 - **Sessions**: every session, most recent first: title, folder, prompts, API calls, tokens, estimated cost.

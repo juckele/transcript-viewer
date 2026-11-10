@@ -86,8 +86,17 @@ tbody tr.row:hover { background: var(--surface-2); }
 details.step { margin: 4px 0; }
 details.step > summary { color: var(--muted); }
 details.step > summary .foot { display: inline; }
-details.step[open] > summary { margin-bottom: 2px; }
-.toolbar { position: sticky; top: 45px; z-index: 4; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; background: var(--page); }
+/* An open step becomes the box, so its usage line sits inside at the top. */
+/* Steps draw their own arrow so it can stay in the indent when the step opens into a box. */
+details.step > summary { list-style: none; position: relative; padding-left: 18px; }
+details.step > summary::-webkit-details-marker { display: none; }
+details.step > summary::before { content: "\25B6"; position: absolute; left: 2px; font-size: 9px; line-height: 19px; color: var(--muted); }
+details.step[open] > summary::before { content: "\25BC"; left: -29px; }
+details.step[open] { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  margin: 6px 0 6px 18px; }
+details.step[open] > summary { margin-bottom: 6px; padding-left: 0; }
+details.step[open] > .msg.assistant { background: none; border: 0; padding: 0; margin: 0; border-radius: 0; }
+.toolbar { position: sticky; top: var(--header-h, 44px); z-index: 4; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; background: var(--page); }
 .toolbar button { border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); padding: 4px 10px; border-radius: 6px;
   font: inherit; font-size: 13px; cursor: pointer; }
 .toolbar button.on { color: var(--ink); background: var(--surface-2); font-weight: 600; }
@@ -262,7 +271,7 @@ function renderList() {
   const today = new Date().toDateString();
   let all = 0, todayCost = 0, assumed = false;
   for (const s of S.sessions) { const t = sumTotals(s.main, s.sub); all += t.cost; assumed ||= t.assumed; }
-  document.getElementById('list-sub').textContent = `${S.sessions.length} sessions in ${shortPath(S.root)} · updates live`;
+  document.getElementById('list-sub').textContent = `${S.sessions.length} session${S.sessions.length === 1 ? '' : 's'} in ${shortPath(S.root)} · updates live`;
   const active = S.sessions.filter(s => new Date(s.lastTs).toDateString() === today).length;
   document.getElementById('list-tiles').innerHTML =
     tile('Sessions', S.sessions.length, `${active} active today`) +
@@ -569,6 +578,10 @@ function connect() {
   };
 }
 window.addEventListener('hashchange', () => { load().catch(console.error); });
+// Pin the toolbar flush under the header, whatever height the header wraps to.
+const setHeaderH = () => document.documentElement.style.setProperty('--header-h', document.querySelector('header').offsetHeight + 'px');
+setHeaderH();
+window.addEventListener('resize', setHeaderH);
 let resizeT;
 window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (route().name === 'usage' && S.usage) renderUsage(); }, 150); });
 setInterval(() => { if (route().name === 'list') renderList(); }, 60000); // keep "x min ago" fresh
