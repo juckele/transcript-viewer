@@ -7,7 +7,8 @@ seeing where the tokens went. Pages update live as sessions are written.
 node server.js            # http://127.0.0.1:4777
 ```
 
-No dependencies (Node 18+). It only listens on 127.0.0.1.
+No dependencies (Node 18+). It only listens on 127.0.0.1, and only answers requests addressed to `localhost`,
+`127.0.0.1` or `[::1]` on its port, so a web page can't reach it through DNS rebinding.
 
 ## Screenshots
 
@@ -43,6 +44,7 @@ reply collapse to one line with their cost and tokens; this one is open to show 
 |---|---|---|
 | `PORT` | `4777` | HTTP port |
 | `HOST` | `127.0.0.1` | Address to listen on |
+| `ALLOWED_HOSTS` | unset | Extra host names the server answers to, comma-separated (e.g. a LAN name when `HOST` is `0.0.0.0`) |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Folder of transcripts to read |
 | `WEEKLY_RESET_AT` | unset | Any past or future weekly-limit reset time (ISO 8601, e.g. `2026-11-12T01:00:00Z`). When set, the Usage page shows totals for the current weekly window. |
 
