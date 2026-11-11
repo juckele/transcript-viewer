@@ -13,6 +13,17 @@ const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC = path.join(__dirname, 'public');
 const MAX_RESULT_CHARS = 20000;
 
+// Only answer requests addressed to this server by a name we expect. Otherwise a web page could point its own
+// domain at 127.0.0.1 (DNS rebinding) and read the transcripts. ALLOWED_HOSTS adds names, comma-separated.
+const ALLOWED_HOSTS = new Set(
+  ['localhost', '127.0.0.1', '[::1]', HOST, ...(process.env.ALLOWED_HOSTS || '').split(',')]
+    .map(h => h.trim().toLowerCase())
+    .filter(h => h && !['0.0.0.0', '::', '[::]'].includes(h)));
+function hostAllowed(header) {
+  const m = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec((header || '').toLowerCase());
+  return !!m && ALLOWED_HOSTS.has(m[1]) && Number(m[2] || 80) === PORT;
+}
+
 // ---------- pricing ----------
 const PRICING = JSON.parse(fs.readFileSync(path.join(__dirname, 'pricing.json'), 'utf8'));
 function priceFor(model) {
@@ -387,6 +398,7 @@ function sendJson(res, obj) {
   res.end(JSON.stringify(obj));
 }
 const server = http.createServer((req, res) => {
+  if (!hostAllowed(req.headers.host)) { res.writeHead(403); return res.end('forbidden host\n'); }
   const url = new URL(req.url, 'http://x');
   const p = url.pathname;
   if (p === '/events') {
