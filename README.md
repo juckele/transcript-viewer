@@ -57,6 +57,9 @@ reply collapse to one line with their cost and tokens; this one is open to show 
 - Thinking text is usually empty in the logs (the API leaves it out by default). Its token count is still logged.
 - The cost is what this usage would cost at API list prices. Your subscription plan's limits are measured
   differently, so treat these numbers as a guide.
+- The bold **Discounted cost** column scales list cost by `monthlyPrice / apiCreditsPerMonth` from the
+  `subscription` block in `pricing.json`: roughly what the usage costs on the subscription. `apiCreditsPerMonth`
+  is our own rough estimate of how much list-price usage the plan covers in a month; edit it as that changes.
 
 ## How it works
 

@@ -231,6 +231,13 @@ function localDay(ts) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+// Totals for one local day across every transcript (calls are bucketed by their own timestamp, so a session
+// that started yesterday only counts today's calls).
+function dayTotals(day) {
+  const t = emptyTotals();
+  for (const st of files.values()) for (const c of st.calls.values()) if (c.ts && localDay(c.ts) === day) addCall(t, c);
+  return t;
+}
 function usageDaily() {
   const days = new Map();
   const models = {};
@@ -409,7 +416,7 @@ const server = http.createServer((req, res) => {
     req.on('close', () => { clients.delete(res); clearInterval(ping); });
     return;
   }
-  if (p === '/api/sessions') return sendJson(res, { root: ROOT, sessions: sessionSummaries() });
+  if (p === '/api/sessions') return sendJson(res, { root: ROOT, sessions: sessionSummaries(), today: dayTotals(localDay(Date.now())) });
   if (p === '/api/usage') return sendJson(res, usageDaily());
   if (p === '/api/pricing') return sendJson(res, PRICING);
   if (p === '/api/session') {
