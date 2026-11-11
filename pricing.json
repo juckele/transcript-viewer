@@ -2,6 +2,12 @@
   "_note": "USD per million tokens. Source: Anthropic first-party API list prices as of 2026-10-06. Opus 5.5 was checked against the cost Claude Code logged in a transcript (exact match). Entries marked assumed are guesses: check them against the pricing page.",
   "cacheWrite5mMultiplier": 1.25,
   "cacheWrite1hMultiplier": 2,
+  "subscription": {
+    "_note": "Discounted cost = list cost x monthlyPrice / apiCreditsPerMonth. apiCreditsPerMonth is our rough estimate of how much usage at API list prices the plan covers in a month (John, 2026-11-11), not a published figure.",
+    "plan": "Max",
+    "monthlyPrice": 106.25,
+    "apiCreditsPerMonth": 2000
+  },
   "models": {
     "claude-fable-5-2": { "input": 10, "output": 50, "cacheRead": 0.25, "assumed": true },
     "claude-fable-5-1": { "input": 10, "output": 50, "cacheRead": 0.25 },

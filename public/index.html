@@ -51,6 +51,7 @@ h1 { font-size: 20px; margin: 4px 0 4px; }
 .sub { color: var(--ink-2); font-size: 13px; }
 .muted { color: var(--muted); }
 .num { font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+td.disc { font-weight: 700; }
 .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 14px 0; }
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .tile .k { font-size: 12px; color: var(--ink-2); }
@@ -147,7 +148,7 @@ details.tool > summary b { color: var(--ink); font-weight: 600; }
 <script>
 'use strict';
 const $view = document.getElementById('view');
-const S = { sessions: [], filter: '', detail: null, detailKey: null, usage: null, expandMode: 'replies', range: 30, metric: 'cost', flash: new Set() };
+const S = { sessions: [], filter: '', detail: null, detailKey: null, usage: null, expandMode: 'replies', range: 30, metric: 'cost', flash: new Set(), sub: null };
 
 // ---------- formatting ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -162,6 +163,12 @@ function fmtUsd(n, assumed) {
   const s = n >= 100 ? '$' + Math.round(n).toLocaleString() : n >= 1 ? '$' + n.toFixed(2) : n >= 0.01 ? '$' + n.toFixed(2) : n > 0 ? '<$0.01' : '$0';
   return (assumed ? '~' : '') + s;
 }
+// Discounted cost: list cost scaled by what the subscription costs per dollar of API usage it covers
+// (pricing.json "subscription"). Rendered bold in its own column.
+const discFactor = () => S.sub && S.sub.apiCreditsPerMonth ? S.sub.monthlyPrice / S.sub.apiCreditsPerMonth : null;
+const discTitle = () => S.sub ? `List cost × ${S.sub.monthlyPrice} ÷ ${S.sub.apiCreditsPerMonth.toLocaleString()}: the ${S.sub.plan} plan's price over the API usage we estimate it covers per month` : '';
+const discTh = () => `<th class="num" title="${esc(discTitle())}">Discounted cost</th>`;
+const discTd = (cost, assumed) => `<td class="num disc">${discFactor() == null || cost == null ? '—' : fmtUsd(cost * discFactor(), assumed)}</td>`;
 function rel(ts) {
   if (!ts) return '';
   const s = (Date.now() - Date.parse(ts)) / 1000;
@@ -233,9 +240,10 @@ function route() {
 async function load(changed) {
   const r = route();
   document.querySelectorAll('[data-nav]').forEach(a => a.classList.toggle('on', a.dataset.nav === (r.name === 'usage' ? 'usage' : 'list')));
+  if (!S.sub) S.sub = (await getJson('/api/pricing').catch(() => ({}))).subscription || null;
   if (r.name === 'list') {
     const d = await getJson('/api/sessions');
-    S.sessions = d.sessions; S.root = d.root;
+    S.sessions = d.sessions; S.root = d.root; S.today = d.today;
     if (changed) changed.forEach(k => S.flash.add(k));
     renderList();
   } else if (r.name === 'session') {
@@ -259,7 +267,7 @@ function renderList() {
       <div class="tiles" id="list-tiles"></div>
       <input type="search" id="q" placeholder="Filter by title, prompt, or folder" value="${esc(S.filter)}">
       <div class="tablewrap"><table>
-        <thead><tr><th>Session</th><th>Last active</th><th class="num hide-sm">Prompts</th><th class="num hide-sm">API calls</th><th class="num">Tokens</th><th class="num">Est. cost</th></tr></thead>
+        <thead><tr><th>Session</th><th>Last active</th><th class="num hide-sm">Prompts</th><th class="num hide-sm">API calls</th><th class="num">Tokens</th><th class="num">Est. cost</th>${discTh()}</tr></thead>
         <tbody id="list-body"></tbody></table></div>`;
     document.getElementById('q').addEventListener('input', e => { S.filter = e.target.value; renderList(); });
     document.getElementById('list-body').addEventListener('click', e => {
@@ -269,12 +277,15 @@ function renderList() {
   const q = S.filter.toLowerCase();
   const rows = S.sessions.filter(s => !q || [s.title, s.firstPrompt, s.lastPrompt, s.cwd, s.project].some(x => x && x.toLowerCase().includes(q)));
   const today = new Date().toDateString();
-  let all = 0, todayCost = 0, assumed = false;
+  let all = 0, assumed = false;
+  const td = S.today || { cost: 0, calls: 0, assumed: false };
   for (const s of S.sessions) { const t = sumTotals(s.main, s.sub); all += t.cost; assumed ||= t.assumed; }
   document.getElementById('list-sub').textContent = `${S.sessions.length} session${S.sessions.length === 1 ? '' : 's'} in ${shortPath(S.root)} · updates live`;
   const active = S.sessions.filter(s => new Date(s.lastTs).toDateString() === today).length;
   document.getElementById('list-tiles').innerHTML =
     tile('Sessions', S.sessions.length, `${active} active today`) +
+    tile('Est. cost, today', fmtUsd(td.cost, td.assumed), `${td.calls} API calls, list prices`) +
+    tile('Discounted cost, today', discFactor() == null ? '—' : fmtUsd(td.cost * discFactor(), td.assumed), S.sub ? `at ${S.sub.plan} plan rates` : 'no subscription in pricing.json') +
     tile('Est. cost, all logged sessions', fmtUsd(all, assumed), 'list prices, incl. subagents');
   document.getElementById('list-body').innerHTML = rows.map(s => {
     const t = sumTotals(s.main, s.sub);
@@ -288,8 +299,8 @@ function renderList() {
       <td class="num hide-sm">${s.prompts}</td>
       <td class="num hide-sm">${t.calls}</td>
       <td class="num">${fmtTok(totTok(t))}</td>
-      <td class="num">${fmtUsd(t.cost, t.assumed)}</td></tr>`;
-  }).join('') || `<tr><td colspan="6" class="muted">No sessions match.</td></tr>`;
+      <td class="num">${fmtUsd(t.cost, t.assumed)}</td>${discTd(t.cost, t.assumed)}</tr>`;
+  }).join('') || `<tr><td colspan="7" class="muted">No sessions match.</td></tr>`;
   S.flash.clear();
 }
 const tile = (k, v, d) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>${d ? `<div class="d">${esc(d)}</div>` : ''}</div>`;
@@ -515,9 +526,9 @@ function renderUsage() {
   });
 
   const modelRows = Object.entries(u.models).sort((a, b) => b[1].cost - a[1].cost).map(([m, t]) =>
-    `<tr><td>${esc(m)}</td><td class="num">${t.calls}</td><td class="num">${fmtTok(totTok(t))}</td><td class="num">${fmtTok(t.out)}</td><td class="num">${t.unpriced ? '<span class="muted">no price</span>' : fmtUsd(t.cost, t.assumed)}</td></tr>`).join('');
+    `<tr><td>${esc(m)}</td><td class="num">${t.calls}</td><td class="num">${fmtTok(totTok(t))}</td><td class="num">${fmtTok(t.out)}</td><td class="num">${t.unpriced ? '<span class="muted">no price</span>' : fmtUsd(t.cost, t.assumed)}</td>${discTd(t.unpriced ? null : t.cost, t.assumed)}</tr>`).join('');
   const dayRows = days.slice().reverse().filter(d => d.calls).map(d =>
-    `<tr><td>${esc(d.day)}</td><td class="num">${d.calls}</td>${CATS.map(c => `<td class="num">${fmtTok(c.tok(d))}</td>`).join('')}<td class="num">${fmtUsd(d.cost, d.assumed)}</td></tr>`).join('');
+    `<tr><td>${esc(d.day)}</td><td class="num">${d.calls}</td>${CATS.map(c => `<td class="num">${fmtTok(c.tok(d))}</td>`).join('')}<td class="num">${fmtUsd(d.cost, d.assumed)}</td>${discTd(d.cost, d.assumed)}</tr>`).join('');
 
   const wasOpen = !!document.querySelector('details[data-k="daytable"][open]');
   $view.innerHTML = `
@@ -539,10 +550,10 @@ function renderUsage() {
       <div class="tip" id="tip"></div>
     </div>
     <details data-k="daytable"${wasOpen ? ' open' : ''}><summary>Table by day</summary><div class="tablewrap"><table>
-      <thead><tr><th>Day</th><th class="num">Calls</th>${CATS.map(c => `<th class="num">${esc(c.label)}</th>`).join('')}<th class="num">Est. cost</th></tr></thead>
-      <tbody>${dayRows || '<tr><td colspan="7" class="muted">No usage in range.</td></tr>'}</tbody></table></div></details>
+      <thead><tr><th>Day</th><th class="num">Calls</th>${CATS.map(c => `<th class="num">${esc(c.label)}</th>`).join('')}<th class="num">Est. cost</th>${discTh()}</tr></thead>
+      <tbody>${dayRows || '<tr><td colspan="8" class="muted">No usage in range.</td></tr>'}</tbody></table></div></details>
     <h1 style="margin-top:22px">By model, all time</h1>
-    <div class="tablewrap"><table><thead><tr><th>Model</th><th class="num">API calls</th><th class="num">Tokens</th><th class="num">Output</th><th class="num">Est. cost</th></tr></thead>
+    <div class="tablewrap"><table><thead><tr><th>Model</th><th class="num">API calls</th><th class="num">Tokens</th><th class="num">Output</th><th class="num">Est. cost</th>${discTh()}</tr></thead>
       <tbody>${modelRows}</tbody></table></div>`;
 
   $view.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { S.range = b.dataset.range === 'all' ? 'all' : +b.dataset.range; renderUsage(); });
