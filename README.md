@@ -102,6 +102,24 @@ account, so a sample from any computer counts; ledgers combine by `message.id`.
 Usage that leaves no transcript here (claude.ai chat, the phone app, cloud sessions) still moves the
 percentages, so keep it out of the measuring week or note when it happened.
 
+### Estimating what the limits are worth
+
+```bash
+node sampler/analyze.js        # --dir <data dir>, --out <file>, --quiet
+```
+
+It reads every computer's folder in the data dir, which it finds the way `install.sh` does (`--dir`,
+`CLAUDE_USAGE_DIR`, `~/git/<repo name>` when `CLAUDE_USAGE_REPO` is set, else `~/.local/share/claude-usage`).
+Each time a limit goes up by 1%, it adds up the list-price cost of every API call since that window opened.
+Cost against percentage is close to a straight line, and its slope is the list-price value of 1% of the limit.
+Each window gets its own intercept, which absorbs usage the plan counted but the ledgers don't have. Ticks
+where the polls around it are more than 15 minutes apart are left out.
+
+It prints a summary and writes `~/.local/state/claude-usage-sampler/analysis.json` (or under
+`CLAUDE_USAGE_STATE_DIR`). The viewer's Usage page shows the last run under "Plan limits at list price": the
+value of each limit, its weekly value per month next to `pricing.json`'s estimate, how much usage the
+transcripts miss, and which computers have stopped sending samples.
+
 ## How it works
 
 `server.js` reads each transcript once, then reads only the lines appended since. It watches the folder

@@ -254,7 +254,7 @@ async function load(changed) {
     renderSession(key, S.detailKey === key);
     S.detailKey = key;
   } else {
-    S.usage = await getJson('/api/usage');
+    [S.usage, S.analysis] = await Promise.all([getJson('/api/usage'), getJson('/api/usage-analysis').catch(() => null)]);
     renderUsage();
   }
 }
@@ -476,6 +476,41 @@ function niceMax(v) {
   for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
   return 10 * p;
 }
+// The last result of sampler/analyze.js: what each plan limit is worth at list price.
+function analysisSection() {
+  const a = S.analysis;
+  const head = '<h1 style="margin-top:22px">Plan limits at list price</h1>';
+  if (!a || a.missing) return `${head}<div class="sub">Run <code>node sampler/analyze.js</code> on a computer with the usage sampler installed. Its last result shows here.</div>`;
+  const pct = v => v == null ? '' : `±${fmtUsd(v * 100)}`;
+  const tiles = a.limits.map(l => {
+    const f = l.fit, c = l.current;
+    const now = c ? `now ${c.pct}%${c.costSoFar != null ? `, ${fmtUsd(c.costSoFar)} so far` : ''}` : '';
+    if (!f) return tile(l.label, '—', [l.note, now].filter(Boolean).join(' · '));
+    return tile(l.label, fmtUsd(f.fullLimit), [pct(f.stderr), `${fmtUsd(f.perPercent)} per 1%`, `${f.points} ticks, ${f.windows.length} window${f.windows.length === 1 ? '' : 's'}`, now].filter(Boolean).join(' · '));
+  });
+  const m = a.monthly || {};
+  if (m.fromWeekly) tiles.push(tile('Weekly limit per month', fmtUsd(m.fromWeekly), m.estimate ? `pricing.json estimates ${fmtUsd(m.estimate)}` : ''));
+  const notes = [];
+  const untracked = a.limits.filter(l => l.fit && l.fit.untrackedPerWindow > 0.005)
+    .map(l => `${fmtUsd(l.fit.untrackedPerWindow)} per ${l.windowHours === 5 ? '5-hour window' : 'week'}${['session', 'weekly_all'].includes(l.key) ? '' : ` (${l.label})`}`);
+  if (untracked.length) notes.push(`Usage the plan counted that these transcripts don't show: ${untracked.join(', ')}. That's claude.ai, the phone, or a computer without the sampler.`);
+  for (const h of a.hosts.filter(h => h.stale)) notes.push(`No samples from ${h.name} since ${h.lastSample ? when(h.lastSample) : 'it was set up'}.`);
+  const hostRows = a.hosts.map(h => `<tr><td>${esc(h.name)}</td><td class="num">${h.samples}</td><td>${esc(when(h.lastSample))}${h.stale ? ' <span class="err">· stale</span>' : ''}</td><td class="num">${h.calls}</td><td>${esc(when(h.lastCall))}</td></tr>`).join('');
+  const winRows = a.limits.filter(l => l.fit).flatMap(l => l.fit.windows.slice().reverse().map(w =>
+    `<tr><td>${esc(l.label)}</td><td>${esc(when(w.start))}</td><td class="num">${w.points}</td><td class="num">${w.fromPct}–${w.toPct}%</td><td class="num">${fmtUsd(Math.max(0, -w.intercept))}</td></tr>`)).join('');
+  const open = k => document.querySelector(`details[data-k="${k}"][open]`) ? ' open' : '';
+  return `${head}
+    <div class="sub">From <code>sampler/analyze.js</code>, run ${esc(rel(a.generatedAt))} (${esc(when(a.generatedAt))}): ${a.samples} samples and ${a.calls.toLocaleString()} API calls from ${a.hosts.length} computer${a.hosts.length === 1 ? '' : 's'}. Each 1% step in a limit is matched against the list-price cost logged since its window opened.</div>
+    <div class="tiles">${tiles.join('')}</div>
+    ${notes.map(n => `<div class="sub" style="margin:4px 0">${esc(n)}</div>`).join('')}
+    <details data-k="anhosts"${open('anhosts')}><summary>Computers</summary><div class="tablewrap"><table>
+      <thead><tr><th>Computer</th><th class="num">Samples</th><th>Last sample</th><th class="num">Ledger rows</th><th>Last API call</th></tr></thead>
+      <tbody>${hostRows}</tbody></table></div></details>
+    <details data-k="anwins"${open('anwins')}><summary>Windows in the fit</summary><div class="tablewrap"><table>
+      <thead><tr><th>Limit</th><th>Window opened</th><th class="num">Ticks</th><th class="num">Range</th><th class="num">Not in transcripts</th></tr></thead>
+      <tbody>${winRows || '<tr><td colspan="5" class="muted">None yet.</td></tr>'}</tbody></table></div></details>`;
+}
+
 function renderUsage() {
   const u = S.usage;
   const days = dayList(u.days, S.range);
@@ -554,7 +589,8 @@ function renderUsage() {
       <tbody>${dayRows || '<tr><td colspan="8" class="muted">No usage in range.</td></tr>'}</tbody></table></div></details>
     <h1 style="margin-top:22px">By model, all time</h1>
     <div class="tablewrap"><table><thead><tr><th>Model</th><th class="num">API calls</th><th class="num">Tokens</th><th class="num">Output</th><th class="num">Est. cost</th>${discTh()}</tr></thead>
-      <tbody>${modelRows}</tbody></table></div>`;
+      <tbody>${modelRows}</tbody></table></div>
+    ${analysisSection()}`;
 
   $view.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { S.range = b.dataset.range === 'all' ? 'all' : +b.dataset.range; renderUsage(); });
   $view.querySelectorAll('[data-metric]').forEach(b => b.onclick = () => { S.metric = b.dataset.metric; renderUsage(); });
