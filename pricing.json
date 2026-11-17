@@ -3,10 +3,10 @@
   "cacheWrite5mMultiplier": 1.25,
   "cacheWrite1hMultiplier": 2,
   "subscription": {
-    "_note": "Discounted cost = list cost x monthlyPrice / apiCreditsPerMonth. apiCreditsPerMonth is our rough estimate of how much usage at API list prices the plan covers in a month (John, 2026-11-11), not a published figure.",
+    "_note": "Discounted cost = list cost x monthlyPrice / apiCreditsPerMonth. apiCreditsPerMonth is how much usage at API list prices the plan covers in a month, not a published figure. 6000 is rounded from sampler/analyze.js on 2026-11-17: the weekly limit measured at about $1,417 at list price (26 ticks), or about $6,160 a month.",
     "plan": "Max",
     "monthlyPrice": 106.25,
-    "apiCreditsPerMonth": 2000
+    "apiCreditsPerMonth": 6000
   },
   "models": {
     "claude-fable-5-2": { "input": 10, "output": 50, "cacheRead": 0.25, "assumed": true },
