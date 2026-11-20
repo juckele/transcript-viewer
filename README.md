@@ -46,7 +46,20 @@ reply collapse to one line with their cost and tokens; this one is open to show 
 | `HOST` | `127.0.0.1` | Address to listen on |
 | `ALLOWED_HOSTS` | unset | Extra host names the server answers to, comma-separated (e.g. a LAN name when `HOST` is `0.0.0.0`) |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Folder of transcripts to read |
+| `CLAUDE_PROJECTS_DIRS` | unset | Several folders to read, separated like `PATH`, each with an optional label before `=` (see below). Replaces `CLAUDE_PROJECTS_DIR`. |
 | `WEEKLY_RESET_AT` | unset | Any past or future weekly-limit reset time (ISO 8601, e.g. `2026-11-12T01:00:00Z`). When set, the Usage page shows totals for the current weekly window. |
+
+### Sessions from several computers
+
+Copy each computer's `~/.claude/projects` to the others (for example with Syncthing, one way, into a folder
+outside `~/.claude` so Claude Code doesn't treat the copies as its own), then list every folder:
+
+```bash
+CLAUDE_PROJECTS_DIRS="💻=~/.claude/projects:🖥️=~/peers/desktop/projects" node server.js
+```
+
+Each session shows its folder's label, the Sessions page gets a button per folder, and the Usage page adds a
+table by folder. Links name the folder by its position in the list, so keep the order the same.
 
 ## How the numbers are calculated
 
