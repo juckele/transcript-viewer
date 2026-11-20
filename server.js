@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Claude Code transcript viewer: watches ~/.claude/projects and serves live views.
+// Claude Code transcript viewer: watches ~/.claude/projects (or several such folders) and serves live views.
 // Zero dependencies. Run: node server.js  (then open http://127.0.0.1:4777)
 'use strict';
 const fs = require('fs');
@@ -7,7 +7,32 @@ const path = require('path');
 const os = require('os');
 const http = require('http');
 
-const ROOT = process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
+// Transcript folders to read. CLAUDE_PROJECTS_DIRS lists several, separated like PATH (":", or ";" on
+// Windows), each with an optional label before "=":
+//   CLAUDE_PROJECTS_DIRS="💻=~/.claude/projects:🖥️=~/peers/desktop/projects"
+// The label is shown next to each session. Without CLAUDE_PROJECTS_DIRS there is one folder:
+// CLAUDE_PROJECTS_DIR, or ~/.claude/projects.
+function expandHome(p) { return p === '~' || p.startsWith('~/') ? path.join(os.homedir(), p.slice(1)) : p; }
+function parseSources() {
+  const list = process.env.CLAUDE_PROJECTS_DIRS;
+  const entries = list
+    ? list.split(path.delimiter).map(s => s.trim()).filter(Boolean)
+    : [process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects')];
+  return entries.map((s, i) => {
+    const eq = s.indexOf('=');
+    const labelled = eq > 0 && !/[\\/]/.test(s.slice(0, eq)); // a "=" inside a path is not a label
+    return {
+      id: String(i),
+      label: labelled ? s.slice(0, eq).trim() : '',
+      root: path.resolve(expandHome((labelled ? s.slice(eq + 1) : s).trim())),
+    };
+  });
+}
+const SOURCES = parseSources();
+const sourceById = id => SOURCES.find(s => s.id === id);
+// Longest root first, so a folder nested inside another source's folder belongs to the inner one.
+const BY_DEPTH = [...SOURCES].sort((a, b) => b.root.length - a.root.length);
+const sourceOf = abs => BY_DEPTH.find(s => abs.startsWith(s.root + path.sep));
 const PORT = Number(process.env.PORT) || 4777;
 const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC = path.join(__dirname, 'public');
@@ -35,35 +60,38 @@ function usageAnalysis() {
 }
 
 // ---------- file discovery ----------
-// Main transcript: ROOT/<project>/<session>.jsonl
-// Subagent:        ROOT/<project>/<session>/subagents/agent-<id>.jsonl
+// Main transcript: <source root>/<project>/<session>.jsonl
+// Subagent:        <source root>/<project>/<session>/subagents/agent-<id>.jsonl
 function classify(abs) {
-  const rel = path.relative(ROOT, abs);
-  const parts = rel.split(path.sep);
+  const src = sourceOf(abs);
+  if (!src) return null;
+  const parts = path.relative(src.root, abs).split(path.sep);
   if (parts.length === 2 && parts[1].endsWith('.jsonl')) {
-    return { kind: 'main', project: parts[0], session: parts[1].slice(0, -6) };
+    return { kind: 'main', src: src.id, project: parts[0], session: parts[1].slice(0, -6) };
   }
   if (parts.length === 4 && parts[2] === 'subagents' && /^agent-.*\.jsonl$/.test(parts[3])) {
-    return { kind: 'sub', project: parts[0], session: parts[1], agent: parts[3].slice(6, -6) };
+    return { kind: 'sub', src: src.id, project: parts[0], session: parts[1], agent: parts[3].slice(6, -6) };
   }
   return null;
 }
 function listFiles() {
   const out = [];
-  let projects = [];
-  try { projects = fs.readdirSync(ROOT, { withFileTypes: true }); } catch { return out; }
-  for (const p of projects) {
-    if (!p.isDirectory()) continue;
-    const pdir = path.join(ROOT, p.name);
-    let ents = [];
-    try { ents = fs.readdirSync(pdir, { withFileTypes: true }); } catch { continue; }
-    for (const e of ents) {
-      if (e.isFile() && e.name.endsWith('.jsonl')) out.push(path.join(pdir, e.name));
-      else if (e.isDirectory()) {
-        const sdir = path.join(pdir, e.name, 'subagents');
-        let subs = [];
-        try { subs = fs.readdirSync(sdir); } catch { continue; }
-        for (const s of subs) if (/^agent-.*\.jsonl$/.test(s)) out.push(path.join(sdir, s));
+  for (const src of SOURCES) {
+    let projects = [];
+    try { projects = fs.readdirSync(src.root, { withFileTypes: true }); } catch { continue; }
+    for (const p of projects) {
+      if (!p.isDirectory()) continue;
+      const pdir = path.join(src.root, p.name);
+      let ents = [];
+      try { ents = fs.readdirSync(pdir, { withFileTypes: true }); } catch { continue; }
+      for (const e of ents) {
+        if (e.isFile() && e.name.endsWith('.jsonl')) out.push(path.join(pdir, e.name));
+        else if (e.isDirectory()) {
+          const sdir = path.join(pdir, e.name, 'subagents');
+          let subs = [];
+          try { subs = fs.readdirSync(sdir); } catch { continue; }
+          for (const s of subs) if (/^agent-.*\.jsonl$/.test(s)) out.push(path.join(sdir, s));
+        }
       }
     }
   }
@@ -134,7 +162,7 @@ function refreshFile(abs) {
   }
   if (stat.size === st.size && stat.mtimeMs === st.mtimeMs) return false;
   if (stat.size < st.offset) { // truncated or rewritten: start over
-    const info = { kind: st.kind, project: st.project, session: st.session, agent: st.agent };
+    const info = { kind: st.kind, src: st.src, project: st.project, session: st.session, agent: st.agent };
     st = newState(info);
     files.set(abs, st);
   }
@@ -169,14 +197,14 @@ function addCall(t, c) {
   } else t.unpriced++;
 }
 
-function sessionKey(project, session) { return project + '/' + session; }
+function sessionKey(src, project, session) { return src + '/' + project + '/' + session; }
 function sessionSummaries() {
   const byKey = new Map();
   for (const st of files.values()) {
-    const key = sessionKey(st.project, st.session);
+    const key = sessionKey(st.src, st.project, st.session);
     let s = byKey.get(key);
     if (!s) {
-      s = { key, project: st.project, session: st.session, title: null, firstPrompt: null, lastPrompt: null,
+      s = { key, src: st.src, project: st.project, session: st.session, title: null, firstPrompt: null, lastPrompt: null,
         cwd: null, gitBranch: null, firstTs: null, lastTs: null, prompts: 0, subagents: 0, size: 0,
         main: emptyTotals(), sub: emptyTotals(), models: {} };
       byKey.set(key, s);
@@ -209,6 +237,7 @@ function dayTotals(day) {
 function usageDaily() {
   const days = new Map();
   const models = {};
+  const sources = Object.fromEntries(SOURCES.map(s => [s.id, emptyTotals()]));
   for (const st of files.values()) {
     for (const c of st.calls.values()) {
       if (!c.ts) continue;
@@ -220,9 +249,10 @@ function usageDaily() {
       t.byModel[c.model] = (t.byModel[c.model] || 0) + (k ? k.cost : 0);
       if (!models[c.model]) models[c.model] = emptyTotals();
       addCall(models[c.model], c);
+      addCall(sources[st.src], c);
     }
   }
-  const out = { days: [...days.values()].sort((a, b) => (a.day < b.day ? -1 : 1)), models, window: null };
+  const out = { days: [...days.values()].sort((a, b) => (a.day < b.day ? -1 : 1)), models, sources, window: null };
   // Optional: totals inside the current weekly limit window, anchored on a known reset time.
   const anchor = process.env.WEEKLY_RESET_AT && Date.parse(process.env.WEEKLY_RESET_AT);
   if (anchor) {
@@ -306,13 +336,14 @@ function buildConversation(rows) {
   }
   return { items, results };
 }
-function sessionDetail(project, session) {
-  if (!/^[^/\\]+$/.test(project) || !/^[\w-]+$/.test(session)) return null;
-  const mainPath = path.join(ROOT, project, session + '.jsonl');
+function sessionDetail(srcId, project, session) {
+  const src = sourceById(srcId);
+  if (!src || !/^[^/\\]+$/.test(project) || project === '..' || !/^[\w-]+$/.test(session)) return null;
+  const mainPath = path.join(src.root, project, session + '.jsonl');
   if (!fs.existsSync(mainPath)) return null;
   const main = buildConversation(readJsonl(mainPath));
   const subagents = [];
-  const sdir = path.join(ROOT, project, session, 'subagents');
+  const sdir = path.join(src.root, project, session, 'subagents');
   let subs = [];
   try { subs = fs.readdirSync(sdir).filter(f => /^agent-.*\.jsonl$/.test(f)); } catch {}
   for (const f of subs) {
@@ -321,7 +352,7 @@ function sessionDetail(project, session) {
     try { meta = JSON.parse(fs.readFileSync(path.join(sdir, `agent-${agentId}.meta.json`), 'utf8')); } catch {}
     subagents.push({ agentId, meta, ...buildConversation(readJsonl(path.join(sdir, f))) });
   }
-  const summary = sessionSummaries().find(s => s.key === sessionKey(project, session)) || null;
+  const summary = sessionSummaries().find(s => s.key === sessionKey(src.id, project, session)) || null;
   return { summary, ...main, subagents };
 }
 
@@ -343,7 +374,7 @@ function flush() {
   for (const abs of pending) {
     if (refreshFile(abs)) {
       const st = files.get(abs);
-      if (st) changed.add(sessionKey(st.project, st.session));
+      if (st) changed.add(sessionKey(st.src, st.project, st.session));
     }
   }
   pending = new Set();
@@ -355,13 +386,15 @@ function fullScan() {
   for (const abs of [...files.keys()]) if (!seen.has(abs)) { files.delete(abs); broadcast({ type: 'changed', sessions: [] }); }
 }
 function startWatching() {
-  try {
-    fs.watch(ROOT, { recursive: true }, (_evt, name) => {
-      if (!name || !name.endsWith('.jsonl')) return;
-      queue(path.join(ROOT, name));
-    });
-  } catch (e) {
-    console.warn('fs.watch unavailable, relying on polling:', e.message);
+  for (const src of SOURCES) {
+    try {
+      fs.watch(src.root, { recursive: true }, (_evt, name) => {
+        if (!name || !name.endsWith('.jsonl')) return;
+        queue(path.join(src.root, name));
+      });
+    } catch (e) {
+      console.warn(`fs.watch unavailable for ${src.root}, relying on polling:`, e.message);
+    }
   }
   setInterval(fullScan, 5000); // safety net for missed events and new folders
 }
@@ -384,12 +417,12 @@ const server = http.createServer((req, res) => {
     req.on('close', () => { clients.delete(res); clearInterval(ping); });
     return;
   }
-  if (p === '/api/sessions') return sendJson(res, { root: ROOT, sessions: sessionSummaries(), today: dayTotals(localDay(Date.now())) });
+  if (p === '/api/sessions') return sendJson(res, { sources: SOURCES, sessions: sessionSummaries(), today: dayTotals(localDay(Date.now())) });
   if (p === '/api/usage') return sendJson(res, usageDaily());
   if (p === '/api/pricing') return sendJson(res, PRICING);
   if (p === '/api/usage-analysis') return sendJson(res, usageAnalysis());
   if (p === '/api/session') {
-    const d = sessionDetail(url.searchParams.get('p') || '', url.searchParams.get('s') || '');
+    const d = sessionDetail(url.searchParams.get('src') || SOURCES[0].id, url.searchParams.get('p') || '', url.searchParams.get('s') || '');
     if (!d) { res.writeHead(404); return res.end('not found'); }
     return sendJson(res, d);
   }
@@ -402,6 +435,6 @@ const server = http.createServer((req, res) => {
 
 const t0 = Date.now();
 for (const abs of listFiles()) refreshFile(abs);
-console.log(`Indexed ${files.size} transcript files from ${ROOT} in ${Date.now() - t0} ms`);
+console.log(`Indexed ${files.size} transcript files from ${SOURCES.map(s => (s.label ? s.label + ' ' : '') + s.root).join(', ')} in ${Date.now() - t0} ms`);
 startWatching();
 server.listen(PORT, HOST, () => console.log(`Transcript viewer: http://${HOST}:${PORT}`));

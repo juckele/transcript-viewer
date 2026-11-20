@@ -70,6 +70,7 @@ tbody tr.row:hover { background: var(--surface-2); }
 .title-cell { min-width: 260px; }
 .title-cell .t { font-weight: 500; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .title-cell .p { font-size: 12px; color: var(--muted); }
+.src { margin-right: 6px; }
 @keyframes flash { from { background: color-mix(in srgb, var(--live) 22%, transparent); } to { background: transparent; } }
 .flash { animation: flash 2s ease-out; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-right: 10px; }
@@ -148,7 +149,7 @@ details.tool > summary b { color: var(--ink); font-weight: 600; }
 <script>
 'use strict';
 const $view = document.getElementById('view');
-const S = { sessions: [], filter: '', detail: null, detailKey: null, usage: null, expandMode: 'replies', range: 30, metric: 'cost', flash: new Set(), sub: null };
+const S = { sessions: [], sources: [], srcFilter: 'all', filter: '', detail: null, detailKey: null, usage: null, expandMode: 'replies', range: 30, metric: 'cost', flash: new Set(), sub: null };
 
 // ---------- formatting ----------
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -184,7 +185,16 @@ function sumTotals(a, b) {
   return { in: a.in + b.in, out: a.out + b.out, cr: a.cr + b.cr, cw5: a.cw5 + b.cw5, cw1h: a.cw1h + b.cw1h, think: a.think + b.think,
     calls: a.calls + b.calls, cost: a.cost + b.cost, assumed: a.assumed || b.assumed, unpriced: a.unpriced + b.unpriced };
 }
-function shortPath(p) { return p ? p.replace(/^\/Users\/[^/]+/, '~') : ''; }
+function shortPath(p) { return p ? p.replace(/^\/(Users|home)\/[^/]+/, '~') : ''; }
+// Transcript folders (CLAUDE_PROJECTS_DIRS). With more than one, each session shows its folder's label.
+const multiSrc = () => S.sources.length > 1;
+const srcOf = id => S.sources.find(x => x.id === id);
+const srcName = x => x ? x.label || shortPath(x.root) : '';
+const srcBadge = id => {
+  const x = srcOf(id);
+  return multiSrc() && x && x.label ? `<span class="src" title="${esc(shortPath(x.root))}">${esc(x.label)}</span>` : '';
+};
+const sessionHref = s => `#/s/${encodeURIComponent(s.src)}/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session)}`;
 
 // Minimal markdown: fenced code, inline code, headings, lists, bold/italics, links, tables.
 function md(src) {
@@ -233,7 +243,9 @@ const getJson = u => fetch(u, { cache: 'no-store' }).then(r => { if (!r.ok) thro
 function route() {
   const h = location.hash || '#/';
   let m;
-  if ((m = h.match(/^#\/s\/([^/]+)\/([^/]+)$/))) return { name: 'session', p: decodeURIComponent(m[1]), s: decodeURIComponent(m[2]) };
+  if ((m = h.match(/^#\/s\/([^/]+)\/([^/]+)\/([^/]+)$/))) return { name: 'session', src: decodeURIComponent(m[1]), p: decodeURIComponent(m[2]), s: decodeURIComponent(m[3]) };
+  // Links from before there could be several folders: the first folder.
+  if ((m = h.match(/^#\/s\/([^/]+)\/([^/]+)$/))) return { name: 'session', src: '0', p: decodeURIComponent(m[1]), s: decodeURIComponent(m[2]) };
   if (h.startsWith('#/usage')) return { name: 'usage' };
   return { name: 'list' };
 }
@@ -243,18 +255,20 @@ async function load(changed) {
   if (!S.sub) S.sub = (await getJson('/api/pricing').catch(() => ({}))).subscription || null;
   if (r.name === 'list') {
     const d = await getJson('/api/sessions');
-    S.sessions = d.sessions; S.root = d.root; S.today = d.today;
+    S.sessions = d.sessions; S.sources = d.sources; S.today = d.today;
     if (changed) changed.forEach(k => S.flash.add(k));
     renderList();
   } else if (r.name === 'session') {
-    const key = r.p + '/' + r.s;
+    const key = r.src + '/' + r.p + '/' + r.s;
     if (changed && !changed.includes(key)) return;
-    try { S.detail = await getJson(`/api/session?p=${encodeURIComponent(r.p)}&s=${encodeURIComponent(r.s)}`); }
+    if (!S.sources.length) S.sources = (await getJson('/api/sessions')).sources;
+    try { S.detail = await getJson(`/api/session?src=${encodeURIComponent(r.src)}&p=${encodeURIComponent(r.p)}&s=${encodeURIComponent(r.s)}`); }
     catch { $view.innerHTML = '<p class="muted">Session not found.</p>'; return; }
     renderSession(key, S.detailKey === key);
     S.detailKey = key;
   } else {
     [S.usage, S.analysis] = await Promise.all([getJson('/api/usage'), getJson('/api/usage-analysis').catch(() => null)]);
+    if (!S.sources.length) S.sources = (await getJson('/api/sessions')).sources;
     renderUsage();
   }
 }
@@ -265,7 +279,8 @@ function renderList() {
     $view.innerHTML = `
       <h1>Sessions</h1><div class="sub" id="list-sub"></div>
       <div class="tiles" id="list-tiles"></div>
-      <input type="search" id="q" placeholder="Filter by title, prompt, or folder" value="${esc(S.filter)}">
+      <div class="controls"><span class="seg" id="src-seg" hidden></span>
+        <input type="search" id="q" placeholder="Filter by title, prompt, or folder" value="${esc(S.filter)}"></div>
       <div class="tablewrap"><table>
         <thead><tr><th>Session</th><th>Last active</th><th class="num hide-sm">Prompts</th><th class="num hide-sm">API calls</th><th class="num">Tokens</th><th class="num">Est. cost</th>${discTh()}</tr></thead>
         <tbody id="list-body"></tbody></table></div>`;
@@ -273,14 +288,28 @@ function renderList() {
     document.getElementById('list-body').addEventListener('click', e => {
       const tr = e.target.closest('tr[data-href]'); if (tr && !e.target.closest('a')) location.hash = tr.dataset.href;
     });
+    document.getElementById('src-seg').addEventListener('click', e => {
+      const b = e.target.closest('button[data-src]'); if (b) { S.srcFilter = b.dataset.src; renderList(); }
+    });
+  }
+  // One button per folder, when there are several.
+  const seg = document.getElementById('src-seg');
+  seg.hidden = !multiSrc();
+  if (multiSrc()) {
+    if (S.srcFilter !== 'all' && !srcOf(S.srcFilter)) S.srcFilter = 'all';
+    const btn = (id, label, n, title) => `<button data-src="${esc(id)}" class="${S.srcFilter === id ? 'on' : ''}" title="${esc(title)}">${esc(label)} <span class="muted">${n}</span></button>`;
+    seg.innerHTML = btn('all', 'All', S.sessions.length, 'Every folder') +
+      S.sources.map(x => btn(x.id, srcName(x), S.sessions.filter(s => s.src === x.id).length, shortPath(x.root))).join('');
   }
   const q = S.filter.toLowerCase();
-  const rows = S.sessions.filter(s => !q || [s.title, s.firstPrompt, s.lastPrompt, s.cwd, s.project].some(x => x && x.toLowerCase().includes(q)));
+  const rows = S.sessions.filter(s => (S.srcFilter === 'all' || s.src === S.srcFilter) &&
+    (!q || [s.title, s.firstPrompt, s.lastPrompt, s.cwd, s.project, srcName(srcOf(s.src))].some(x => x && x.toLowerCase().includes(q))));
   const today = new Date().toDateString();
   let all = 0, assumed = false;
   const td = S.today || { cost: 0, calls: 0, assumed: false };
   for (const s of S.sessions) { const t = sumTotals(s.main, s.sub); all += t.cost; assumed ||= t.assumed; }
-  document.getElementById('list-sub').textContent = `${S.sessions.length} session${S.sessions.length === 1 ? '' : 's'} in ${shortPath(S.root)} · updates live`;
+  const where = S.sources.map(x => (multiSrc() && x.label ? x.label + ' ' : '') + shortPath(x.root)).join(', ');
+  document.getElementById('list-sub').textContent = `${S.sessions.length} session${S.sessions.length === 1 ? '' : 's'} in ${where} · updates live`;
   const active = S.sessions.filter(s => new Date(s.lastTs).toDateString() === today).length;
   document.getElementById('list-tiles').innerHTML =
     tile('Sessions', S.sessions.length, `${active} active today`) +
@@ -289,11 +318,11 @@ function renderList() {
     tile('Est. cost, all logged sessions', fmtUsd(all, assumed), 'list prices, incl. subagents');
   document.getElementById('list-body').innerHTML = rows.map(s => {
     const t = sumTotals(s.main, s.sub);
-    const href = `#/s/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session)}`;
+    const href = sessionHref(s);
     const title = s.title || s.firstPrompt || s.session;
     const flash = S.flash.has(s.key) ? ' flash' : '';
     return `<tr class="row${flash}" data-href="${href}">
-      <td class="title-cell"><div class="t"><a href="${href}">${esc(title)}</a></div>
+      <td class="title-cell"><div class="t">${srcBadge(s.src)}<a href="${href}">${esc(title)}</a></div>
         <div class="p">${esc(shortPath(s.cwd) || s.project)}${s.gitBranch && s.gitBranch !== 'HEAD' ? ' · ' + esc(s.gitBranch) : ''}${s.subagents ? ` · ${s.subagents} subagent${s.subagents > 1 ? 's' : ''}` : ''}</div></td>
       <td title="${esc(when(s.lastTs))}">${esc(rel(s.lastTs))}</td>
       <td class="num hide-sm">${s.prompts}</td>
@@ -404,6 +433,7 @@ function expandPolicy(el) {
 }
 function renderSession(key, isUpdate) {
   const d = S.detail;
+  const src = route().src;
   const s = d.summary || { main: convTotals(d.items), sub: { in: 0, out: 0, cr: 0, cw5: 0, cw1h: 0, think: 0, calls: 0, cost: 0, assumed: false, unpriced: 0 } };
   const t = sumTotals(s.main, s.sub);
   const subByTool = {};
@@ -417,8 +447,8 @@ function renderSession(key, isUpdate) {
   const orphans = d.subagents.filter(sa => !(sa.meta && sa.meta.toolUseId && d.items.some(it => it.blocks && it.blocks.some(b => b.id === sa.meta.toolUseId))));
   $view.innerHTML = `
     <div class="sub"><a href="#/">← Sessions</a></div>
-    <h1>${esc(s.title || s.firstPrompt || key)}</h1>
-    <div class="sub">${esc(shortPath(s.cwd))}${s.gitBranch && s.gitBranch !== 'HEAD' ? ' · ' + esc(s.gitBranch) : ''} · started ${esc(when(s.firstTs))} · last activity ${esc(rel(s.lastTs))}${models ? ' · ' + esc(models) : ''}</div>
+    <h1>${srcBadge(src)}${esc(s.title || s.firstPrompt || key)}</h1>
+    <div class="sub">${multiSrc() && srcOf(src) && !srcOf(src).label ? esc(srcName(srcOf(src))) + ' · ' : ''}${esc(shortPath(s.cwd))}${s.gitBranch && s.gitBranch !== 'HEAD' ? ' · ' + esc(s.gitBranch) : ''} · started ${esc(when(s.firstTs))} · last activity ${esc(rel(s.lastTs))}${models ? ' · ' + esc(models) : ''}</div>
     <div class="tiles">
       ${tile('Est. cost', fmtUsd(t.cost, t.assumed), s.sub.calls ? `subagents ${fmtUsd(s.sub.cost, s.sub.assumed)}` : 'no subagents')}
       ${tile('API calls', t.calls, `${s.main.calls} main · ${s.sub.calls} subagent`)}
@@ -562,6 +592,10 @@ function renderUsage() {
 
   const modelRows = Object.entries(u.models).sort((a, b) => b[1].cost - a[1].cost).map(([m, t]) =>
     `<tr><td>${esc(m)}</td><td class="num">${t.calls}</td><td class="num">${fmtTok(totTok(t))}</td><td class="num">${fmtTok(t.out)}</td><td class="num">${t.unpriced ? '<span class="muted">no price</span>' : fmtUsd(t.cost, t.assumed)}</td>${discTd(t.unpriced ? null : t.cost, t.assumed)}</tr>`).join('');
+  const srcRows = multiSrc() && u.sources ? S.sources.map(x => {
+    const t = u.sources[x.id];
+    return t ? `<tr><td>${esc(srcName(x))}${x.label ? ` <span class="muted">${esc(shortPath(x.root))}</span>` : ''}</td><td class="num">${t.calls}</td><td class="num">${fmtTok(totTok(t))}</td><td class="num">${fmtTok(t.out)}</td><td class="num">${fmtUsd(t.cost, t.assumed)}</td>${discTd(t.cost, t.assumed)}</tr>` : '';
+  }).join('') : '';
   const dayRows = days.slice().reverse().filter(d => d.calls).map(d =>
     `<tr><td>${esc(d.day)}</td><td class="num">${d.calls}</td>${CATS.map(c => `<td class="num">${fmtTok(c.tok(d))}</td>`).join('')}<td class="num">${fmtUsd(d.cost, d.assumed)}</td>${discTd(d.cost, d.assumed)}</tr>`).join('');
 
@@ -590,6 +624,9 @@ function renderUsage() {
     <h1 style="margin-top:22px">By model, all time</h1>
     <div class="tablewrap"><table><thead><tr><th>Model</th><th class="num">API calls</th><th class="num">Tokens</th><th class="num">Output</th><th class="num">Est. cost</th>${discTh()}</tr></thead>
       <tbody>${modelRows}</tbody></table></div>
+    ${srcRows ? `<h1 style="margin-top:22px">By folder, all time</h1>
+    <div class="tablewrap"><table><thead><tr><th>Folder</th><th class="num">API calls</th><th class="num">Tokens</th><th class="num">Output</th><th class="num">Est. cost</th>${discTh()}</tr></thead>
+      <tbody>${srcRows}</tbody></table></div>` : ''}
     ${analysisSection()}`;
 
   $view.querySelectorAll('[data-range]').forEach(b => b.onclick = () => { S.range = b.dataset.range === 'all' ? 'all' : +b.dataset.range; renderUsage(); });
