@@ -194,6 +194,14 @@ const srcBadge = id => {
   const x = srcOf(id);
   return multiSrc() && x && x.label ? `<span class="src" title="${esc(shortPath(x.root))}">${esc(x.label)}</span>` : '';
 };
+const isChatSrc = id => (srcOf(id) || {}).kind === 'chat';
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+function fmtSecs(n) {
+  if (n == null) return '';
+  if (n < 60) return n + ' s';
+  const m = Math.floor(n / 60), sec = n % 60;
+  return m < 60 ? `${m} min${sec ? ` ${sec} s` : ''}` : `${Math.floor(m / 60)} h ${m % 60} min`;
+}
 const sessionHref = s => `#/s/${encodeURIComponent(s.src)}/${encodeURIComponent(s.project)}/${encodeURIComponent(s.session)}`;
 
 // Minimal markdown: fenced code, inline code, headings, lists, bold/italics, links, tables.
@@ -303,7 +311,7 @@ function renderList() {
   }
   const q = S.filter.toLowerCase();
   const rows = S.sessions.filter(s => (S.srcFilter === 'all' || s.src === S.srcFilter) &&
-    (!q || [s.title, s.firstPrompt, s.lastPrompt, s.cwd, s.project, srcName(srcOf(s.src))].some(x => x && x.toLowerCase().includes(q))));
+    (!q || [s.title, s.summary, s.firstPrompt, s.lastPrompt, s.cwd, s.project, srcName(srcOf(s.src))].some(x => x && x.toLowerCase().includes(q))));
   const today = new Date().toDateString();
   let all = 0, assumed = false;
   const td = S.today || { cost: 0, calls: 0, assumed: false };
@@ -321,6 +329,13 @@ function renderList() {
     const href = sessionHref(s);
     const title = s.title || s.firstPrompt || s.session;
     const flash = S.flash.has(s.key) ? ' flash' : '';
+    // claude.ai chats: the export has no token counts, so no calls, tokens or cost.
+    if (s.chat) return `<tr class="row${flash}" data-href="${href}">
+      <td class="title-cell"><div class="t">${srcBadge(s.src)}<a href="${href}">${esc(title)}</a></div>
+        <div class="p">claude.ai chat · ${plural(s.messages, 'message')}${s.toolCalls ? ` · ${plural(s.toolCalls, 'tool call')}` : ''}</div></td>
+      <td title="${esc(when(s.lastTs))}">${esc(rel(s.lastTs))}</td>
+      <td class="num hide-sm">${s.prompts}</td>
+      <td class="num hide-sm muted">—</td><td class="num muted">—</td><td class="num muted">—</td><td class="num muted">—</td></tr>`;
     return `<tr class="row${flash}" data-href="${href}">
       <td class="title-cell"><div class="t">${srcBadge(s.src)}<a href="${href}">${esc(title)}</a></div>
         <div class="p">${esc(shortPath(s.cwd) || s.project)}${s.gitBranch && s.gitBranch !== 'HEAD' ? ' · ' + esc(s.gitBranch) : ''}${s.subagents ? ` · ${s.subagents} subagent${s.subagents > 1 ? 's' : ''}` : ''}</div></td>
@@ -373,6 +388,7 @@ function renderBlocks(it, results, subByTool, prefix) {
     if (b.type === 'thinking') {
       const k = `${prefix}think:${it.id}:${i}`;
       return `<details class="think" data-k="${esc(k)}"><summary>Thinking</summary>${b.text ? `<div class="md">${md(b.text)}</div>`
+        : S.detail && S.detail.chat ? '<div class="muted">The export has no thinking text for this block.</div>'
         : '<div class="muted">The log has no thinking text. The API leaves it empty unless summaries are turned on. Its token count is in the line below this message.</div>'}</details>`;
     }
     if (b.type === 'tool_use') {
@@ -405,7 +421,11 @@ function renderItems(items, results, subByTool, prefix = '') {
     for (const it of t.rest) if (it.kind === 'assistant') for (const b of it.blocks) if (b.type === 'tool_use' && subByTool[b.id]) {
       const st = convTotals(subByTool[b.id].items); subCost += st.cost; subAssumed ||= st.assumed;
     }
-    const head = `<div class="turn-head"><span>${esc(when(t.prompt ? t.prompt.ts : (t.rest[0] || {}).ts))}</span>
+    const ts = t.prompt ? t.prompt.ts : (t.rest[0] || {}).ts;
+    const chatTools = t.rest.reduce((a, it) => a + (it.toolCalls || 0), 0);
+    const head = S.detail && S.detail.chat
+      ? `<div class="turn-head"><span>${esc(when(ts))}</span>${chatTools ? `<span>${plural(chatTools, 'tool call')}</span>` : ''}</div>`
+      : `<div class="turn-head"><span>${esc(when(ts))}</span>
       <span>${tot.calls} API call${tot.calls === 1 ? '' : 's'}</span><span>${fmtTok(totTok(tot))} tokens</span>
       <span class="cost">${fmtUsd(tot.cost + subCost, tot.assumed || subAssumed)}</span>${subCost ? `<span>subagents ${fmtUsd(subCost, subAssumed)}</span>` : ''}</div>`;
     const prompt = t.prompt ? `<div class="msg user">${head}${esc(t.prompt.text)}${t.prompt.images ? `<div class="muted">[${t.prompt.images} image${t.prompt.images > 1 ? 's' : ''}]</div>` : ''}</div>` : '';
@@ -413,13 +433,15 @@ function renderItems(items, results, subByTool, prefix = '') {
       if (it.kind === 'marker') return `<div class="marker">— ${esc(it.text)} —</div>`;
       if (it.kind === 'user') {
         const first = it.text.split('\n')[0].slice(0, 100);
-        return `<details class="meta" data-k="${esc(prefix)}meta:${esc(it.uuid || ti + '.' + ii)}"><summary>Context added by Claude Code: ${esc(first)}</summary><pre>${esc(it.text)}</pre></details>`;
+        return `<details class="meta" data-k="${esc(prefix)}meta:${esc(it.uuid || ti + '.' + ii)}"><summary>${esc(it.label || 'Context added by Claude Code')}: ${esc(first)}</summary><pre>${esc(it.text)}</pre></details>`;
       }
       const blocks = renderBlocks(it, results, subByTool, prefix);
       // Every reply collapses to its usage line. Replies with visible text are marked so the
       // default view ("Expand items with replies") opens them and leaves silent steps closed.
       const hasText = it.blocks.some(b => b.type === 'text' && b.text.trim());
-      const line = usageLine(it, 'span') || '<span class="foot">Step</span>';
+      const line = usageLine(it, 'span') || (S.detail && S.detail.chat
+        ? `<span class="foot">${esc(['Reply', it.toolCalls ? plural(it.toolCalls, 'tool call') : '', fmtSecs(it.secs)].filter(Boolean).join(' · '))}</span>`
+        : '<span class="foot">Step</span>');
       return `<details class="step" data-k="${esc(prefix)}step:${esc(it.id || ti + '.' + ii)}"><summary>${line}</summary><div class="msg assistant${hasText ? ' has-text' : ''}">${blocks}</div></details>`;
     }).join('');
     return `<section class="turn">${prompt}<div class="reply">${rest}</div></section>`;
@@ -444,6 +466,7 @@ function renderSession(key, isUpdate) {
   const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80;
   const y = window.scrollY;
   const models = Object.keys(s.models || {}).join(', ');
+  if (d.chat) return renderChat(key, isUpdate, s, src, { known, open, atBottom, y });
   const orphans = d.subagents.filter(sa => !(sa.meta && sa.meta.toolUseId && d.items.some(it => it.blocks && it.blocks.some(b => b.id === sa.meta.toolUseId))));
   $view.innerHTML = `
     <div class="sub"><a href="#/">← Sessions</a></div>
@@ -459,13 +482,13 @@ function renderSession(key, isUpdate) {
     </div>
     ${t.unpriced ? `<div class="sub">${t.unpriced} API calls used models with no price in pricing.json; they aren't in the cost.</div>` : ''}
     ${t.assumed ? `<div class="sub">~ means some prices are guesses (marked assumed in pricing.json).</div>` : ''}
-    <div class="toolbar">
-      <button data-x="all" class="${S.expandMode === 'all' ? 'on' : ''}">Expand all</button>
-      <button data-x="none" class="${S.expandMode === 'none' ? 'on' : ''}">Collapse all</button>
-      <button data-x="replies" class="${S.expandMode === 'replies' ? 'on' : ''}">Expand items with replies</button>
-    </div>
+    ${toolbar()}
     ${renderItems(d.items, d.results, subByTool)}
     ${orphans.map(sa => `<details class="subagent" data-k="orphan:${esc(sa.agentId)}"><summary>Subagent: ${esc(sa.meta.description || sa.agentId)}</summary>${renderItems(sa.items, sa.results, {}, sa.agentId + '/')}</details>`).join('')}`;
+  afterRender(isUpdate, { known, open, atBottom, y });
+}
+// Shared by both readers: restore open/closed state and scroll, and wire the toolbar.
+function afterRender(isUpdate, { known, open, atBottom, y }) {
   // Items already on screen keep their state; new ones follow the last expand/collapse button pressed.
   document.querySelectorAll('details[data-k]').forEach(x => {
     x.open = known.has(x.dataset.k) ? open.has(x.dataset.k) : expandPolicy(x);
@@ -478,6 +501,32 @@ function renderSession(key, isUpdate) {
   if (!isUpdate) window.scrollTo(0, 0);
   else if (atBottom) window.scrollTo(0, document.body.scrollHeight);
   else window.scrollTo(0, y);
+}
+const toolbar = () => `<div class="toolbar">
+      <button data-x="all" class="${S.expandMode === 'all' ? 'on' : ''}">Expand all</button>
+      <button data-x="none" class="${S.expandMode === 'none' ? 'on' : ''}">Collapse all</button>
+      <button data-x="replies" class="${S.expandMode === 'replies' ? 'on' : ''}">Expand items with replies</button>
+    </div>`;
+// A claude.ai chat: no token counts, so message counts instead of cost tiles.
+function renderChat(key, isUpdate, s, src, state) {
+  const d = S.detail;
+  const thinking = d.items.reduce((a, it) => a + (it.blocks || []).filter(b => b.type === 'thinking').length, 0);
+  const summaryOpen = state.open.has('chatsummary') ? ' open' : '';
+  $view.innerHTML = `
+    <div class="sub"><a href="#/">← Sessions</a></div>
+    <h1>${srcBadge(src)}${esc(s.title || s.firstPrompt || key)}</h1>
+    <div class="sub">claude.ai chat · started ${esc(when(s.firstTs))} · last message ${esc(rel(s.lastTs))}${s.exportDir ? ` · from ${esc(shortPath(s.exportDir))}` : ''}</div>
+    <div class="tiles">
+      ${tile('Prompts', s.prompts, '')}
+      ${tile('Messages', s.messages, s.otherBranches ? `${s.otherBranches} more on other branches, not shown` : 'one branch')}
+      ${tile('Tool calls', s.toolCalls, '')}
+      ${tile('Thinking blocks', thinking, '')}
+      ${tile('Est. cost', '—', 'the export has no token counts')}
+    </div>
+    ${s.summary ? `<details class="meta" data-k="chatsummary"${summaryOpen}><summary>claude.ai's summary of this chat</summary><div class="md">${md(s.summary)}</div></details>` : ''}
+    ${toolbar()}
+    ${renderItems(d.items, d.results, {})}`;
+  afterRender(isUpdate, state);
 }
 
 // ---------- usage ----------
@@ -592,7 +641,7 @@ function renderUsage() {
 
   const modelRows = Object.entries(u.models).sort((a, b) => b[1].cost - a[1].cost).map(([m, t]) =>
     `<tr><td>${esc(m)}</td><td class="num">${t.calls}</td><td class="num">${fmtTok(totTok(t))}</td><td class="num">${fmtTok(t.out)}</td><td class="num">${t.unpriced ? '<span class="muted">no price</span>' : fmtUsd(t.cost, t.assumed)}</td>${discTd(t.unpriced ? null : t.cost, t.assumed)}</tr>`).join('');
-  const srcRows = multiSrc() && u.sources ? S.sources.map(x => {
+  const srcRows = multiSrc() && u.sources ? S.sources.filter(x => x.kind !== 'chat').map(x => {
     const t = u.sources[x.id];
     return t ? `<tr><td>${esc(srcName(x))}${x.label ? ` <span class="muted">${esc(shortPath(x.root))}</span>` : ''}</td><td class="num">${t.calls}</td><td class="num">${fmtTok(totTok(t))}</td><td class="num">${fmtTok(t.out)}</td><td class="num">${fmtUsd(t.cost, t.assumed)}</td>${discTd(t.cost, t.assumed)}</tr>` : '';
   }).join('') : '';

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Claude Code transcript viewer: watches ~/.claude/projects (or several such folders) and serves live views.
+// Claude Code transcript viewer: watches ~/.claude/projects (or several such folders), and optionally claude.ai
+// chat exports, and serves live views.
 // Zero dependencies. Run: node server.js  (then open http://127.0.0.1:4777)
 'use strict';
 const fs = require('fs');
@@ -13,30 +14,37 @@ const http = require('http');
 // The label is shown next to each session. Without CLAUDE_PROJECTS_DIRS there is one folder:
 // CLAUDE_PROJECTS_DIR, or ~/.claude/projects.
 function expandHome(p) { return p === '~' || p.startsWith('~/') ? path.join(os.homedir(), p.slice(1)) : p; }
-function parseSources() {
-  const list = process.env.CLAUDE_PROJECTS_DIRS;
-  const entries = list
-    ? list.split(path.delimiter).map(s => s.trim()).filter(Boolean)
-    : [process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects')];
-  return entries.map((s, i) => {
+//
+// CLAUDE_CHAT_EXPORTS lists folders of claude.ai chat exports the same way (see lib/chats.js). Their label
+// defaults to 📱.
+function parseList(list, kind, defaultLabel) {
+  return list.split(path.delimiter).map(s => s.trim()).filter(Boolean).map(s => {
     const eq = s.indexOf('=');
     const labelled = eq > 0 && !/[\\/]/.test(s.slice(0, eq)); // a "=" inside a path is not a label
     return {
-      id: String(i),
-      label: labelled ? s.slice(0, eq).trim() : '',
+      kind,
+      label: labelled ? s.slice(0, eq).trim() : defaultLabel,
       root: path.resolve(expandHome((labelled ? s.slice(eq + 1) : s).trim())),
     };
   });
 }
+function parseSources() {
+  const code = process.env.CLAUDE_PROJECTS_DIRS
+    ? parseList(process.env.CLAUDE_PROJECTS_DIRS, 'code', '')
+    : [{ kind: 'code', label: '', root: path.resolve(expandHome(process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects'))) }];
+  const list = [...code, ...parseList(process.env.CLAUDE_CHAT_EXPORTS || '', 'chat', '📱')];
+  return list.map((s, i) => ({ id: String(i), ...s }));
+}
 const SOURCES = parseSources();
+const CODE_SOURCES = SOURCES.filter(s => s.kind === 'code');
+const CHAT_SOURCES = SOURCES.filter(s => s.kind === 'chat');
 const sourceById = id => SOURCES.find(s => s.id === id);
 // Longest root first, so a folder nested inside another source's folder belongs to the inner one.
-const BY_DEPTH = [...SOURCES].sort((a, b) => b.root.length - a.root.length);
+const BY_DEPTH = [...CODE_SOURCES].sort((a, b) => b.root.length - a.root.length);
 const sourceOf = abs => BY_DEPTH.find(s => abs.startsWith(s.root + path.sep));
 const PORT = Number(process.env.PORT) || 4777;
 const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC = path.join(__dirname, 'public');
-const MAX_RESULT_CHARS = 20000;
 
 // Only answer requests addressed to this server by a name we expect. Otherwise a web page could point its own
 // domain at 127.0.0.1 (DNS rebinding) and read the transcripts. ALLOWED_HOSTS adds names, comma-separated.
@@ -52,6 +60,8 @@ function hostAllowed(header) {
 // ---------- pricing ----------
 const { PRICING, costOf } = require('./lib/pricing');
 const { normUsage, analysisPath } = require('./lib/usage');
+const { clip, resultText } = require('./lib/text');
+const chats = require('./lib/chats');
 
 // The last result of sampler/analyze.js, if it has been run on this computer.
 function usageAnalysis() {
@@ -76,7 +86,7 @@ function classify(abs) {
 }
 function listFiles() {
   const out = [];
-  for (const src of SOURCES) {
+  for (const src of CODE_SOURCES) {
     let projects = [];
     try { projects = fs.readdirSync(src.root, { withFileTypes: true }); } catch { continue; }
     for (const p of projects) {
@@ -198,6 +208,81 @@ function addCall(t, c) {
 }
 
 function sessionKey(src, project, session) { return src + '/' + project + '/' + session; }
+
+// ---------- claude.ai chat exports ----------
+// Chats sit under one project name. The same chat in several exports (say, a re-export a month later) is
+// shown once, from the export where it was last active.
+const CHAT_PROJECT = 'claude.ai';
+const chatFiles = new Map(); // abs -> { src, size, mtimeMs, convs: [summary] }
+function refreshChats() {
+  const changed = new Set();
+  const seen = new Set();
+  for (const src of CHAT_SOURCES) {
+    for (const abs of chats.findExports(src.root)) {
+      seen.add(abs);
+      let stat;
+      try { stat = fs.statSync(abs); } catch { continue; }
+      const old = chatFiles.get(abs);
+      if (old && old.size === stat.size && old.mtimeMs === stat.mtimeMs) continue;
+      let convs;
+      try { convs = chats.readExport(abs).map(chats.summarize); } catch (e) { console.warn(`Can't read ${abs}:`, e.message); continue; }
+      chatFiles.set(abs, { src: src.id, size: stat.size, mtimeMs: stat.mtimeMs, convs });
+      for (const c of convs) changed.add(sessionKey(src.id, CHAT_PROJECT, c.uuid));
+    }
+  }
+  for (const abs of [...chatFiles.keys()]) if (!seen.has(abs)) { chatFiles.delete(abs); changed.add(''); }
+  return changed;
+}
+// uuid -> { file, conv } per source, newest copy of each chat.
+function chatIndex(srcId) {
+  const best = new Map();
+  for (const [abs, f] of chatFiles) {
+    if (f.src !== srcId) continue;
+    for (const c of f.convs) {
+      const b = best.get(c.uuid);
+      if (!b || (c.lastTs || '') > (b.conv.lastTs || '') || (c.lastTs === b.conv.lastTs && f.mtimeMs > chatFiles.get(b.file).mtimeMs)) {
+        best.set(c.uuid, { file: abs, conv: c });
+      }
+    }
+  }
+  return best;
+}
+function chatSummaries() {
+  const out = [];
+  for (const src of CHAT_SOURCES) {
+    for (const { file, conv: c } of chatIndex(src.id).values()) {
+      out.push({ key: sessionKey(src.id, CHAT_PROJECT, c.uuid), src: src.id, project: CHAT_PROJECT, session: c.uuid, chat: true,
+        title: c.name, summary: c.summary, firstPrompt: c.firstPrompt, lastPrompt: c.lastPrompt, cwd: null, gitBranch: null,
+        firstTs: c.firstTs, lastTs: c.lastTs, prompts: c.prompts, messages: c.messages, otherBranches: c.otherBranches,
+        toolCalls: c.toolCalls, exportDir: path.dirname(file), subagents: 0, size: 0, main: emptyTotals(), sub: emptyTotals(), models: {} });
+    }
+  }
+  return out;
+}
+// The reader needs a whole export parsed. Keep the last one a minute, for clicking between its chats.
+let parsedExport = null;
+function exportConversations(abs) {
+  const mtimeMs = chatFiles.get(abs).mtimeMs;
+  if (parsedExport && parsedExport.abs === abs && parsedExport.mtimeMs === mtimeMs) {
+    clearTimeout(parsedExport.timer);
+  } else {
+    const byId = new Map(chats.readExport(abs).map(c => [c.uuid, c]));
+    if (parsedExport) clearTimeout(parsedExport.timer);
+    parsedExport = { abs, mtimeMs, byId };
+  }
+  parsedExport.timer = setTimeout(() => { parsedExport = null; }, 60000);
+  return parsedExport.byId;
+}
+function chatDetail(src, project, uuid) {
+  if (project !== CHAT_PROJECT) return null;
+  const hit = chatIndex(src.id).get(uuid);
+  if (!hit) return null;
+  let c;
+  try { c = exportConversations(hit.file).get(uuid); } catch { return null; }
+  if (!c) return null;
+  const summary = chatSummaries().find(s => s.key === sessionKey(src.id, project, uuid)) || null;
+  return { summary, chat: true, ...chats.buildChat(c), subagents: [] };
+}
 function sessionSummaries() {
   const byKey = new Map();
   for (const st of files.values()) {
@@ -220,7 +305,7 @@ function sessionSummaries() {
       s.cwd = st.cwd; s.gitBranch = st.gitBranch; s.prompts = st.prompts;
     } else s.subagents++;
   }
-  return [...byKey.values()].filter(s => s.lastTs).sort((a, b) => (b.lastTs > a.lastTs ? 1 : -1));
+  return [...byKey.values(), ...chatSummaries()].filter(s => s.lastTs).sort((a, b) => (b.lastTs > a.lastTs ? 1 : -1));
 }
 
 function localDay(ts) {
@@ -278,17 +363,6 @@ function readJsonl(abs) {
   for (const l of text.split('\n')) { if (!l.trim()) continue; try { rows.push(JSON.parse(l)); } catch {} }
   return rows;
 }
-function clip(s) {
-  if (typeof s !== 'string') s = JSON.stringify(s, null, 2);
-  return s.length > MAX_RESULT_CHARS ? s.slice(0, MAX_RESULT_CHARS) + `\n… [${s.length - MAX_RESULT_CHARS} more characters]` : s;
-}
-function resultText(content) {
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map(b => b.type === 'text' ? b.text : b.type === 'image' ? '[image]' : JSON.stringify(b)).join('\n');
-  }
-  return content == null ? '' : JSON.stringify(content);
-}
 // Turns a transcript into display items: user prompts, assistant messages (blocks merged
 // across lines), tool results keyed by tool_use id, and compaction markers.
 function buildConversation(rows) {
@@ -339,6 +413,7 @@ function buildConversation(rows) {
 function sessionDetail(srcId, project, session) {
   const src = sourceById(srcId);
   if (!src || !/^[^/\\]+$/.test(project) || project === '..' || !/^[\w-]+$/.test(session)) return null;
+  if (src.kind === 'chat') return chatDetail(src, project, session);
   const mainPath = path.join(src.root, project, session + '.jsonl');
   if (!fs.existsSync(mainPath)) return null;
   const main = buildConversation(readJsonl(mainPath));
@@ -384,9 +459,11 @@ function fullScan() {
   const seen = new Set(listFiles());
   for (const abs of seen) queue(abs);
   for (const abs of [...files.keys()]) if (!seen.has(abs)) { files.delete(abs); broadcast({ type: 'changed', sessions: [] }); }
+  const changed = refreshChats();
+  if (changed.size) broadcast({ type: 'changed', sessions: [...changed].filter(Boolean) });
 }
 function startWatching() {
-  for (const src of SOURCES) {
+  for (const src of CODE_SOURCES) {
     try {
       fs.watch(src.root, { recursive: true }, (_evt, name) => {
         if (!name || !name.endsWith('.jsonl')) return;
@@ -435,6 +512,8 @@ const server = http.createServer((req, res) => {
 
 const t0 = Date.now();
 for (const abs of listFiles()) refreshFile(abs);
-console.log(`Indexed ${files.size} transcript files from ${SOURCES.map(s => (s.label ? s.label + ' ' : '') + s.root).join(', ')} in ${Date.now() - t0} ms`);
+refreshChats();
+const nChats = chatSummaries().length;
+console.log(`Indexed ${files.size} transcript files${CHAT_SOURCES.length ? ` and ${nChats} chats from ${chatFiles.size} exports` : ''} from ${SOURCES.map(s => (s.label ? s.label + ' ' : '') + s.root).join(', ')} in ${Date.now() - t0} ms`);
 startWatching();
 server.listen(PORT, HOST, () => console.log(`Transcript viewer: http://${HOST}:${PORT}`));

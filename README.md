@@ -1,7 +1,7 @@
 # transcript-viewer
 
 A small local web app for reading Claude Code session transcripts (`~/.claude/projects/**/*.jsonl`) and
-seeing where the tokens went. Pages update live as sessions are written.
+seeing where the tokens went. It can also show claude.ai chats from a data export. Pages update live as sessions are written.
 
 ```bash
 node server.js            # http://127.0.0.1:4777
@@ -47,6 +47,7 @@ reply collapse to one line with their cost and tokens; this one is open to show 
 | `ALLOWED_HOSTS` | unset | Extra host names the server answers to, comma-separated (e.g. a LAN name when `HOST` is `0.0.0.0`) |
 | `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Folder of transcripts to read |
 | `CLAUDE_PROJECTS_DIRS` | unset | Several folders to read, separated like `PATH`, each with an optional label before `=` (see below). Replaces `CLAUDE_PROJECTS_DIR`. |
+| `CLAUDE_CHAT_EXPORTS` | unset | Folders of claude.ai chat exports, separated like `PATH`, each with an optional label before `=` (default 📱). See below. |
 | `WEEKLY_RESET_AT` | unset | Any past or future weekly-limit reset time (ISO 8601, e.g. `2026-11-12T01:00:00Z`). When set, the Usage page shows totals for the current weekly window. |
 
 ### Sessions from several computers
@@ -60,6 +61,37 @@ CLAUDE_PROJECTS_DIRS="💻=~/.claude/projects:🖥️=~/peers/desktop/projects" 
 
 Each session shows its folder's label, the Sessions page gets a button per folder, and the Usage page adds a
 table by folder. Links name the folder by its position in the list, so keep the order the same.
+
+### claude.ai chats
+
+claude.ai's data export (Settings → Privacy → Export data) emails a list of zip files, one export per
+organization. Download `conversations-000.zip`, unzip it anywhere under one folder (each export in its own
+subfolder), and point the viewer at that folder:
+
+```bash
+CLAUDE_CHAT_EXPORTS=~/claude-exports node server.js
+```
+
+To tell accounts apart, give each account its own folder and label, with each export in a dated folder inside:
+
+```bash
+CLAUDE_CHAT_EXPORTS="📱=~/claude-exports/personal:🌱=~/claude-exports/work" node server.js
+# ~/claude-exports/personal/2026-11-20/conversations.json, ~/claude-exports/work/2026-11-20/conversations.json, …
+```
+
+The viewer finds every `conversations.json` up to four folders down and rereads one when it changes. Chats show
+📱 and sit in the Sessions list with Claude Code sessions. When a chat is in more than one export (a re-export
+a month later, say), the viewer shows the copy with the latest message.
+
+- The export has messages, thinking summaries, tool calls and their results, but no model names or token
+  counts, so chats have no cost and don't count on the Usage page. Each reply shows its tool calls and how long
+  it took.
+- Editing a prompt or retrying a reply makes a branch. The reader shows the branch that ends at the newest
+  message and says how many messages are on other branches.
+- Prompts claude.ai added to a message (the date, reminders) and the text of attached files are collapsed under
+  the prompt.
+- Chat folders come after the Claude Code folders in the position-based links, so adding a Claude Code folder
+  changes chat links.
 
 ## How the numbers are calculated
 
